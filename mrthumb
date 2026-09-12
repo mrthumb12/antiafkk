@@ -6,19 +6,15 @@ local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
 assert(player, "Run this in a Roblox client environment.")
-
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Clean up earlier versions of these helpers.
 for _, name in ipairs({
-    "MrThumbFarmPanel",
-    "CoopFarmPanel",
-    "CoopHoverTest",
-    "AFKControlPanel",
+    "MrThumbFarmPanel", "CoopFarmPanel",
+    "CoopHoverTest", "AFKControlPanel",
 }) do
-    local old = playerGui:FindFirstChild(name)
-    if old then
-        old:Destroy()
+    local previous = playerGui:FindFirstChild(name)
+    if previous then
+        previous:Destroy()
     end
 end
 
@@ -38,16 +34,19 @@ local HACKER_BAG = CFrame.new(
 
 local ARENA = Vector3.new(4011.11328, 6.52139521, -1314.0437)
 
-local mode = nil
+local mode
 local generation = 0
 local elapsed = 0
 local attempts = 0
 local hoverHeight = 8
+local baseline = 0
 local activeCharacter
 local heldRoot
 local attachment
 local align
-local baseline = 0
+local closed = false
+local clickBusy = false
+local rebirthBusy = false
 local connections = {}
 
 local function connect(signal, callback)
@@ -73,8 +72,8 @@ local gui = make("ScreenGui", {
 }, playerGui)
 
 local panel = make("Frame", {
-    Position = UDim2.new(0.5, -180, 0.5, -210),
-    Size = UDim2.fromOffset(360, 420),
+    Position = UDim2.new(0.5, -180, 0.5, -250),
+    Size = UDim2.fromOffset(360, 500),
     BackgroundColor3 = Color3.fromRGB(15, 19, 35),
     BorderSizePixel = 0,
     Active = true,
@@ -125,11 +124,10 @@ end
 
 local title = text("FARM CONTROL", 20, 12, 175, 36, 18)
 title.Active = true
-
 text("created by mrthumb", 194, 20, 120, 20, 10)
 
-local close = button("×", 320, 14, 28)
-close.Size = UDim2.fromOffset(28, 28)
+local closeButton = button("×", 320, 14, 28)
+closeButton.Size = UDim2.fromOffset(28, 28)
 
 local status = text(
     "OFF • Choose a farming mode.",
@@ -142,23 +140,25 @@ local timer = text("00:00:00", 20, 138, 320, 42, 32)
 timer.Font = Enum.Font.Code
 timer.TextColor3 = Color3.fromRGB(115, 225, 237)
 
-local counter = text(
-    "Idle input attempts: 0",
-    20, 180, 320, 20, 11
-)
+local counter = text("Idle input attempts: 0", 20, 181, 320, 20, 11)
 
 local coopButton = button("CO-OP FARM: OFF", 20, 211, 320)
-local bagButton = button("AUTO FARM: HACKER BAG — OFF", 20, 264, 320)
+local bagButton = button("AUTO FARM: HACKER BAG — OFF", 20, 263, 320)
 
-local minus = button("−", 20, 318, 48)
-local heightLabel = text("Hover: 8 studs", 83, 318, 194, 42, 14)
-local plus = button("+", 292, 318, 48)
+local minus = button("−", 20, 315, 48)
+local heightLabel = text("Hover: 8 studs", 83, 315, 194, 42, 14)
+local plus = button("+", 292, 315, 48)
+
+local rebirthButton = button("AUTO REBIRTH: CHECKING", 20, 370, 320)
+local rebirthHint = text(
+    "Mirrors your purchased game setting.",
+    20, 419, 320, 34, 10
+)
 
 text(
     "Drag the heading • No hotkeys\n"
-    .. "AFK handling runs while a mode is ON.\n"
-    .. "Training, rewards and input acceptance aren't verified.",
-    20, 371, 320, 40, 10
+    .. "Closing stops helpers, not the game's Auto Rebirth setting.",
+    20, 458, 320, 34, 10
 )
 
 local function getCharacter()
@@ -192,7 +192,7 @@ local function clearHover()
     heldRoot = nil
 end
 
-local function updateButtons()
+local function updateFarmButtons()
     coopButton.Text = mode == "coop"
         and "CO-OP FARM: ON — CLICK TO STOP"
         or "CO-OP FARM: OFF"
@@ -210,69 +210,79 @@ local function updateButtons()
         or Color3.fromRGB(112, 78, 183)
 end
 
-local function stop(message)
+local function stopFarm(message)
     generation += 1
     mode = nil
     activeCharacter = nil
     clearHover()
-    updateButtons()
 
-    status.Text = message
-        or "OFF • Helper stopped. Existing game training may continue."
+    if not closed then
+        updateFarmButtons()
+        status.Text = message
+            or "OFF • Helper stopped. Game training may continue."
+    end
 end
 
 local function begin(selectedMode, character)
-    stop()
+    stopFarm()
     mode = selectedMode
     activeCharacter = character
     elapsed = 0
     attempts = 0
     counter.Text = "Idle input attempts: 0"
-    updateButtons()
+    updateFarmButtons()
     return generation
 end
 
 local function isCurrent(token, character)
-    return mode ~= nil
-        and generation == token
-        and gui.Parent ~= nil
+    return not closed
+        and mode ~= nil
+        and token == generation
         and player.Character == character
 end
 
-local function moveCharacter(character, root, destination)
-    local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
-    character:PivotTo(destination * rootToPivot)
-end
-
-local function findStartButton()
+local function findPath(names)
     local object = playerGui
 
-    for _, name in ipairs({
-        "ScreenGui", "Menus", "EndlessJoin",
-        "Container", "Main", "Join", "TextLabel",
-    }) do
+    for _, name in ipairs(names) do
         object = object:FindFirstChild(name)
         if not object then
             return nil
         end
     end
 
-    if not object:IsA("TextLabel") or object.Text ~= "Start" then
-        return nil
-    end
+    return object
+end
 
-    local label = object
+local function isShown(object)
+    if not object or not object:IsDescendantOf(playerGui) then
+        return false
+    end
 
     while object and object ~= playerGui do
         if object:IsA("GuiObject") and not object.Visible then
-            return nil
+            return false
         end
 
         if object:IsA("ScreenGui") and not object.Enabled then
-            return nil
+            return false
         end
 
         object = object.Parent
+    end
+
+    return true
+end
+
+local function findStartButton()
+    local label = findPath({
+        "ScreenGui", "Menus", "EndlessJoin",
+        "Container", "Main", "Join", "TextLabel",
+    })
+
+    if not label or not label:IsA("TextLabel")
+        or label.Text ~= "Start" or not isShown(label) then
+        return nil
     end
 
     local target = label:FindFirstAncestorWhichIsA("GuiButton")
@@ -285,50 +295,138 @@ local function findStartButton()
     return nil
 end
 
-local function clickStart(token, character)
-    local wasEnabled = gui.Enabled
+local function getRebirthControl()
+    local container = findPath({
+        "ScreenGui", "Bottom", "Holder",
+        "BarContainer", "AutoRebirthBtn",
+    })
 
-    -- Hide our own panel so it cannot intercept the click.
+    return container, container and container:FindFirstChild("Toggle")
+end
+
+local function colourMatches(actual, expected)
+    return math.abs(actual.R - expected.R) < 0.02
+        and math.abs(actual.G - expected.G) < 0.02
+        and math.abs(actual.B - expected.B) < 0.02
+end
+
+local function readRebirthState()
+    local _, indicator = getRebirthControl()
+
+    if not indicator or not indicator:IsA("GuiObject") then
+        return nil
+    end
+
+    local colour = indicator.BackgroundColor3
+
+    if colourMatches(colour, Color3.fromRGB(102, 255, 0)) then
+        return true
+    elseif colourMatches(colour, Color3.fromRGB(255, 50, 0)) then
+        return false
+    end
+
+    return nil
+end
+
+local function getRebirthButton()
+    local container, indicator = getRebirthControl()
+
+    if not container or not indicator or not isShown(indicator) then
+        error("Start training and make the game's Auto Rebirth bar visible.")
+    end
+
+    local target
+
+    if container:IsA("GuiButton") then
+        target = container
+    elseif indicator:IsA("GuiButton") then
+        target = indicator
+    else
+        target = indicator:FindFirstAncestorWhichIsA("GuiButton")
+    end
+
+    if not target
+        or not (target == container or target:IsDescendantOf(container)) then
+        error("Couldn't identify a button inside AutoRebirthBtn.")
+    end
+
+    return target
+end
+
+local function sendClick(target)
+    if not target or not isShown(target) then
+        error("The target button isn't visible.")
+    end
+
+    local position = target.AbsolutePosition
+    local size = target.AbsoluteSize
+
+    if size.X <= 0 or size.Y <= 0 then
+        error("The target button has no visible size.")
+    end
+
+    local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
+    local inset = Vector2.zero
+
+    if screen and not screen.IgnoreGuiInset then
+        inset = GuiService:GetGuiInset()
+    end
+
+    local x = position.X + size.X / 2 + inset.X
+    local y = position.Y + size.Y / 2 + inset.Y
+
+    local input = game:GetService("VirtualInputManager")
+    input:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+-- Shared click lock: hide only this helper while clicking game UI.
+local function withPanelHidden(action)
+    if clickBusy or closed then
+        return false, "Another UI action is busy."
+    end
+
+    clickBusy = true
+    local wasEnabled = gui.Enabled
     gui.Enabled = false
 
     local success, reason = pcall(function()
         task.wait(0.1)
 
-        if not isCurrent(token, character) then
-            return
+        if not closed then
+            action()
         end
-
-        local target = findStartButton()
-        if not target then
-            error("Start menu disappeared before clicking.")
-        end
-
-        local position = target.AbsolutePosition
-        local size = target.AbsoluteSize
-        local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
-        local inset = Vector2.zero
-
-        if screen and not screen.IgnoreGuiInset then
-            inset = GuiService:GetGuiInset()
-        end
-
-        local x = position.X + size.X / 2 + inset.X
-        local y = position.Y + size.Y / 2 + inset.Y
-        local input = game:GetService("VirtualInputManager")
-
-        input:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        input:SendMouseButtonEvent(x, y, 0, false, game, 0)
 
         task.wait(0.1)
     end)
 
-    -- Restore the panel even if the input call failed.
-    if gui.Parent then
+    if not closed and gui.Parent then
         gui.Enabled = wasEnabled
     end
 
-    if not success then
-        error(tostring(reason), 0)
+    clickBusy = false
+    return success, reason
+end
+
+local function refreshRebirthButton()
+    if rebirthBusy then
+        rebirthButton.Text = "AUTO REBIRTH: CHANGING..."
+        return
+    end
+
+    local state = readRebirthState()
+
+    if state == nil then
+        rebirthButton.Text = "AUTO REBIRTH: UNAVAILABLE"
+        rebirthButton.BackgroundColor3 = Color3.fromRGB(70, 72, 94)
+    else
+        rebirthButton.Text = state
+            and "AUTO REBIRTH: ON"
+            or "AUTO REBIRTH: OFF"
+
+        rebirthButton.BackgroundColor3 = state
+            and Color3.fromRGB(52, 91, 111)
+            or Color3.fromRGB(112, 78, 183)
     end
 end
 
@@ -350,6 +448,11 @@ local function waitFor(token, character, timeout, predicate)
     return false
 end
 
+local function moveCharacter(character, root, destination)
+    local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(destination * rootToPivot)
+end
+
 local function enableHover(root)
     baseline = root.Position.Y
     heldRoot = root
@@ -366,7 +469,6 @@ local function enableHover(root)
     align.RigidityEnabled = false
     align.ForceLimitMode = Enum.ForceLimitMode.PerAxis
 
-    -- Vertical force only.
     align.MaxAxesForce = Vector3.new(
         0,
         root.AssemblyMass * math.max(workspace.Gravity, 1) * 4,
@@ -380,8 +482,12 @@ local function enableHover(root)
 end
 
 local function startCoop()
-    local character, root = getCharacter()
+    if clickBusy or rebirthBusy then
+        status.Text = "Wait for the current UI action to finish."
+        return
+    end
 
+    local character, root = getCharacter()
     if not character then
         status.Text = "Wait for your character to finish spawning."
         return
@@ -401,7 +507,7 @@ local function startCoop()
             status.Text =
                 "1/3 • Waiting for Start.\nWalk into the portal if needed."
 
-            local menuReady = waitFor(token, character, 25, function()
+            local ready = waitFor(token, character, 25, function()
                 return findStartButton() ~= nil
             end)
 
@@ -409,22 +515,32 @@ local function startCoop()
                 return
             end
 
-            if not menuReady then
-                stop("Stopped • Start menu wasn't detected.")
+            if not ready then
+                stopFarm("Stopped • Start menu wasn't detected.")
                 return
             end
 
             status.Text = "2/3 • Clicking Start once."
-            clickStart(token, character)
+
+            local clicked, clickError = withPanelHidden(function()
+                if isCurrent(token, character) then
+                    sendClick(findStartButton())
+                end
+            end)
 
             if not isCurrent(token, character) then
                 return
+            end
+
+            if not clicked then
+                error(tostring(clickError))
             end
 
             status.Text = "2/3 • Waiting for arena arrival."
 
             local arrived = waitFor(token, character, 30, function()
                 local currentCharacter, currentRoot = getCharacter()
+
                 return currentCharacter == character
                     and currentRoot ~= nil
                     and (currentRoot.Position - ARENA).Magnitude <= 100
@@ -436,31 +552,34 @@ local function startCoop()
             end
 
             if not arrived then
-                stop("Stopped • Arena arrival wasn't confirmed.")
+                stopFarm("Stopped • Arena arrival wasn't confirmed.")
                 return
             end
 
             local _, currentRoot = getCharacter()
-
             if not currentRoot then
-                stop("Stopped • Character unavailable.")
+                stopFarm("Stopped • Character unavailable.")
                 return
             end
 
             enableHover(currentRoot)
-            status.Text = "3/3 • Hover enabled. Verify auto-fight is working."
+            status.Text = "3/3 • Hover enabled. Verify combat manually."
         end)
 
         if not success and isCurrent(token, character) then
-            stop("Stopped • Co-op action failed. Check the console.")
+            stopFarm("Stopped • Co-op action failed. Check the console.")
             warn("Co-op Farm:", reason)
         end
     end)
 end
 
 local function startBag()
-    local character, root = getCharacter()
+    if clickBusy or rebirthBusy then
+        status.Text = "Wait for the current UI action to finish."
+        return
+    end
 
+    local character, root = getCharacter()
     if not character then
         status.Text = "Wait for your character to finish spawning."
         return
@@ -473,7 +592,7 @@ local function startBag()
     end)
 
     if not success then
-        stop("Stopped • Hacker Bag movement failed.")
+        stopFarm("Stopped • Hacker Bag movement failed.")
         warn("Hacker Bag:", reason)
         return
     end
@@ -484,7 +603,7 @@ end
 
 connect(coopButton.Activated, function()
     if mode == "coop" then
-        stop("Co-op helper OFF • Gravity restored. Round may continue.")
+        stopFarm("Co-op helper OFF • Gravity restored. Round may continue.")
     else
         startCoop()
     end
@@ -492,10 +611,72 @@ end)
 
 connect(bagButton.Activated, function()
     if mode == "bag" then
-        stop("Auto Farm OFF • Move out of the bag to stop game training.")
+        stopFarm("Auto Farm OFF • Move out of the bag to stop game training.")
     else
         startBag()
     end
+end)
+
+connect(rebirthButton.Activated, function()
+    if rebirthBusy or clickBusy then
+        return
+    end
+
+    if mode == "coop" and not align then
+        rebirthHint.Text = "Wait until the co-op joining sequence finishes."
+        return
+    end
+
+    local current = readRebirthState()
+    if current == nil then
+        rebirthHint.Text = "Train at a bag and wait for its toggle to appear."
+        return
+    end
+
+    local desired = not current
+    rebirthBusy = true
+    refreshRebirthButton()
+
+    local success, reason = withPanelHidden(function()
+        local latest = readRebirthState()
+
+        if latest == nil then
+            error("Auto Rebirth state is unavailable.")
+        end
+
+        -- Don't click if the game already reached the requested state.
+        if latest ~= desired then
+            sendClick(getRebirthButton())
+        end
+    end)
+
+    if closed then
+        return
+    end
+
+    if success then
+        local deadline = os.clock() + 3
+
+        while not closed
+            and readRebirthState() ~= desired
+            and os.clock() < deadline do
+            task.wait(0.1)
+        end
+
+        if closed then
+            return
+        end
+
+        rebirthHint.Text = readRebirthState() == desired
+            and "Game toggle updated. The game handles eligibility."
+            or "Change wasn't confirmed. No repeat click was sent."
+    else
+        rebirthHint.Text = "Couldn't change the setting. Check the console."
+        warn("Auto Rebirth:", reason)
+    end
+
+    rebirthBusy = false
+    refreshRebirthButton()
 end)
 
 local function changeHeight(amount)
@@ -512,7 +693,8 @@ connect(plus.Activated, function()
 end)
 
 connect(player.Idled, function()
-    if not mode then
+    -- Avoid interfering with an in-progress UI click.
+    if not mode or clickBusy or rebirthBusy then
         return
     end
 
@@ -529,8 +711,8 @@ connect(player.Idled, function()
         )
     end)
 
-    if not success and generation == token then
-        stop("Stopped • Idle input unavailable in this environment.")
+    if not success and token == generation and not closed then
+        stopFarm("Stopped • Idle input unavailable in this environment.")
         warn("AFK input:", reason)
     end
 end)
@@ -544,16 +726,16 @@ connect(RunService.Heartbeat, function(delta)
         local character, root = getCharacter()
 
         if character ~= activeCharacter or not root then
-            stop("Stopped • Character changed or died.")
+            stopFarm("Stopped • Character changed or died.")
         elseif mode == "bag" then
             if (root.Position - HACKER_BAG.Position).Magnitude > 50 then
-                stop("Stopped • You left the Hacker Bag area.")
+                stopFarm("Stopped • You left the Hacker Bag area.")
             end
         elseif align then
             if root ~= heldRoot or not align.Parent then
-                stop("Stopped • Hover constraint changed.")
+                stopFarm("Stopped • Hover constraint changed.")
             elseif (root.Position - ARENA).Magnitude > 250 then
-                stop("Stopped • You moved away from the recorded arena.")
+                stopFarm("Stopped • You moved away from the recorded arena.")
             else
                 align.Position = Vector3.new(
                     root.Position.X,
@@ -579,9 +761,11 @@ connect(RunService.Heartbeat, function(delta)
         seconds % 60
     )
 
+    refreshRebirthButton()
+
     if mode == "coop" and align and heldRoot then
         status.Text = string.format(
-            "CO-OP FARM ON • Target +%d studs\nObserved height: %+.1f • Verify combat manually.",
+            "CO-OP FARM ON • Target +%d studs\nObserved height: %+.1f • Combat unverified.",
             hoverHeight,
             heldRoot.Position.Y - baseline
         )
@@ -589,10 +773,10 @@ connect(RunService.Heartbeat, function(delta)
 end)
 
 connect(player.CharacterRemoving, function()
-    stop("Respawning • All helper actions stopped.")
+    stopFarm("Respawning • Farming helpers stopped.")
 end)
 
--- Mouse dragging, with limits based on the actual panel size.
+-- Draggable heading; no keyboard shortcuts.
 local dragging = false
 local dragStart
 local panelStart
@@ -634,6 +818,7 @@ connect(UIS.InputEnded, function(input)
 end)
 
 gui.Destroying:Connect(function()
+    closed = true
     generation += 1
     mode = nil
     clearHover()
@@ -643,6 +828,8 @@ gui.Destroying:Connect(function()
     end
 end)
 
-connect(close.Activated, function()
+connect(closeButton.Activated, function()
     gui:Destroy()
 end)
+
+refreshRebirthButton()
