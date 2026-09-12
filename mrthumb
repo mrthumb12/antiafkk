@@ -2,14 +2,20 @@ local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
+local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
 assert(player, "Run this in a Roblox client environment.")
 
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Remove earlier versions of this panel and the old hover test.
-for _, name in ipairs({"CoopFarmPanel", "CoopHoverTest"}) do
+-- Clean up earlier versions of these helpers.
+for _, name in ipairs({
+    "MrThumbFarmPanel",
+    "CoopFarmPanel",
+    "CoopHoverTest",
+    "AFKControlPanel",
+}) do
     local old = playerGui:FindFirstChild(name)
     if old then
         old:Destroy()
@@ -23,18 +29,26 @@ local PORTAL = CFrame.new(
     -0.693275869, -6.15392848e-09, 0.720672309
 )
 
-local ARENA = Vector3.new(4011.11328, 6.52139521, -1314.0437)
-local ARRIVAL_RADIUS = 100
-local MENU_TIMEOUT = 25
-local ARRIVAL_TIMEOUT = 30
+local HACKER_BAG = CFrame.new(
+    3843.64185, 5.34242582, 93.6269455,
+    -0.054018259, 9.29440276e-08, -0.998539925,
+    4.49063009e-12, 1, 9.30796915e-08,
+    0.998539925, 5.02351938e-09, -0.054018259
+)
 
-local running = false
+local ARENA = Vector3.new(4011.11328, 6.52139521, -1314.0437)
+
+local mode = nil
 local generation = 0
-local height = 8
 local elapsed = 0
-local connections = {}
-local attachment, align, heldRoot
+local attempts = 0
+local hoverHeight = 8
+local activeCharacter
+local heldRoot
+local attachment
+local align
 local baseline = 0
+local connections = {}
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -52,14 +66,15 @@ local function make(className, properties, parent)
 end
 
 local gui = make("ScreenGui", {
-    Name = "CoopFarmPanel",
+    Name = "MrThumbFarmPanel",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
 
 local panel = make("Frame", {
-    Position = UDim2.new(0.5, -180, 0.5, -190),
-    Size = UDim2.fromOffset(360, 380),
+    Position = UDim2.new(0.5, -180, 0.5, -210),
+    Size = UDim2.fromOffset(360, 420),
     BackgroundColor3 = Color3.fromRGB(15, 19, 35),
     BorderSizePixel = 0,
     Active = true,
@@ -74,10 +89,10 @@ make("UIStroke", {
     Thickness = 1,
 }, panel)
 
-local function text(value, x, y, width, heightPx, size)
+local function text(value, x, y, width, height, size)
     return make("TextLabel", {
         Position = UDim2.fromOffset(x, y),
-        Size = UDim2.fromOffset(width, heightPx),
+        Size = UDim2.fromOffset(width, height),
         BackgroundTransparency = 1,
         Text = value,
         TextColor3 = Color3.fromRGB(218, 220, 239),
@@ -98,6 +113,7 @@ local function button(value, x, y, width)
         TextColor3 = Color3.new(1, 1, 1),
         TextSize = 13,
         Font = Enum.Font.GothamBold,
+        AutoButtonColor = true,
     }, panel)
 
     make("UICorner", {
@@ -107,7 +123,7 @@ local function button(value, x, y, width)
     return control
 end
 
-local title = text("CO-OP FARM", 20, 12, 170, 36, 19)
+local title = text("FARM CONTROL", 20, 12, 175, 36, 18)
 title.Active = true
 
 text("created by mrthumb", 194, 20, 120, 20, 10)
@@ -115,25 +131,34 @@ text("created by mrthumb", 194, 20, 120, 20, 10)
 local close = button("×", 320, 14, 28)
 close.Size = UDim2.fromOffset(28, 28)
 
-local status = text("OFF • Ready to test.", 20, 63, 320, 44, 12)
+local status = text(
+    "OFF • Choose a farming mode.",
+    20, 62, 320, 48, 12
+)
 
-text("SESSION TIME", 20, 115, 320, 18, 10)
+text("SESSION TIME", 20, 116, 320, 18, 10)
 
-local timer = text("00:00:00", 20, 137, 320, 43, 32)
+local timer = text("00:00:00", 20, 138, 320, 42, 32)
 timer.Font = Enum.Font.Code
 timer.TextColor3 = Color3.fromRGB(115, 225, 237)
 
-local farmButton = button("CO-OP FARM: OFF", 20, 194, 320)
+local counter = text(
+    "Idle input attempts: 0",
+    20, 180, 320, 20, 11
+)
 
-local minus = button("−", 20, 251, 48)
-local heightLabel = text("Hover: 8 studs", 83, 251, 194, 42, 14)
-local plus = button("+", 292, 251, 48)
+local coopButton = button("CO-OP FARM: OFF", 20, 211, 320)
+local bagButton = button("AUTO FARM: HACKER BAG — OFF", 20, 264, 320)
+
+local minus = button("−", 20, 318, 48)
+local heightLabel = text("Hover: 8 studs", 83, 318, 194, 42, 14)
+local plus = button("+", 292, 318, 48)
 
 text(
     "Drag the heading • No hotkeys\n"
-    .. "OFF stops hovering, not the game round.\n"
-    .. "Combat remains the game's existing auto-fight.",
-    20, 310, 320, 52, 10
+    .. "AFK handling runs while a mode is ON.\n"
+    .. "Training, rewards and input acceptance aren't verified.",
+    20, 371, 320, 40, 10
 )
 
 local function getCharacter()
@@ -145,7 +170,8 @@ local function getCharacter()
     local root = character:FindFirstChild("HumanoidRootPart")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-    if not root or not humanoid or humanoid.Health <= 0 then
+    if not root or not root:IsA("BasePart")
+        or not humanoid or humanoid.Health <= 0 then
         return nil, nil
     end
 
@@ -166,34 +192,64 @@ local function clearHover()
     heldRoot = nil
 end
 
-local function stopFarm(message)
-    generation += 1
-    running = false
-    clearHover()
+local function updateButtons()
+    coopButton.Text = mode == "coop"
+        and "CO-OP FARM: ON — CLICK TO STOP"
+        or "CO-OP FARM: OFF"
 
-    farmButton.Text = "CO-OP FARM: OFF"
-    farmButton.BackgroundColor3 = Color3.fromRGB(112, 78, 183)
-    status.Text = message or "OFF • Pending actions cancelled. Gravity restored."
+    bagButton.Text = mode == "bag"
+        and "AUTO FARM: HACKER BAG — ON"
+        or "AUTO FARM: HACKER BAG — OFF"
+
+    coopButton.BackgroundColor3 = mode == "coop"
+        and Color3.fromRGB(52, 91, 111)
+        or Color3.fromRGB(112, 78, 183)
+
+    bagButton.BackgroundColor3 = mode == "bag"
+        and Color3.fromRGB(52, 91, 111)
+        or Color3.fromRGB(112, 78, 183)
 end
 
-local function stillRunning(token, character)
-    return running
-        and token == generation
+local function stop(message)
+    generation += 1
+    mode = nil
+    activeCharacter = nil
+    clearHover()
+    updateButtons()
+
+    status.Text = message
+        or "OFF • Helper stopped. Existing game training may continue."
+end
+
+local function begin(selectedMode, character)
+    stop()
+    mode = selectedMode
+    activeCharacter = character
+    elapsed = 0
+    attempts = 0
+    counter.Text = "Idle input attempts: 0"
+    updateButtons()
+    return generation
+end
+
+local function isCurrent(token, character)
+    return mode ~= nil
+        and generation == token
         and gui.Parent ~= nil
         and player.Character == character
+end
+
+local function moveCharacter(character, root, destination)
+    local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+    character:PivotTo(destination * rootToPivot)
 end
 
 local function findStartButton()
     local object = playerGui
 
     for _, name in ipairs({
-        "ScreenGui",
-        "Menus",
-        "EndlessJoin",
-        "Container",
-        "Main",
-        "Join",
-        "TextLabel",
+        "ScreenGui", "Menus", "EndlessJoin",
+        "Container", "Main", "Join", "TextLabel",
     }) do
         object = object:FindFirstChild(name)
         if not object then
@@ -221,36 +277,66 @@ local function findStartButton()
 
     local target = label:FindFirstAncestorWhichIsA("GuiButton")
 
-    if target and target.AbsoluteSize.X > 0 and target.AbsoluteSize.Y > 0 then
+    if target and target.AbsoluteSize.X > 0
+        and target.AbsoluteSize.Y > 0 then
         return target
     end
 
     return nil
 end
 
-local function clickStart(target)
-    local position = target.AbsolutePosition
-    local size = target.AbsoluteSize
-    local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
-    local inset = Vector2.zero
+local function clickStart(token, character)
+    local wasEnabled = gui.Enabled
 
-    if screen and not screen.IgnoreGuiInset then
-        inset = GuiService:GetGuiInset()
+    -- Hide our own panel so it cannot intercept the click.
+    gui.Enabled = false
+
+    local success, reason = pcall(function()
+        task.wait(0.1)
+
+        if not isCurrent(token, character) then
+            return
+        end
+
+        local target = findStartButton()
+        if not target then
+            error("Start menu disappeared before clicking.")
+        end
+
+        local position = target.AbsolutePosition
+        local size = target.AbsoluteSize
+        local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
+        local inset = Vector2.zero
+
+        if screen and not screen.IgnoreGuiInset then
+            inset = GuiService:GetGuiInset()
+        end
+
+        local x = position.X + size.X / 2 + inset.X
+        local y = position.Y + size.Y / 2 + inset.Y
+        local input = game:GetService("VirtualInputManager")
+
+        input:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+
+        task.wait(0.1)
+    end)
+
+    -- Restore the panel even if the input call failed.
+    if gui.Parent then
+        gui.Enabled = wasEnabled
     end
 
-    local x = position.X + size.X / 2 + inset.X
-    local y = position.Y + size.Y / 2 + inset.Y
-
-    local input = game:GetService("VirtualInputManager")
-    input:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    if not success then
+        error(tostring(reason), 0)
+    end
 end
 
 local function waitFor(token, character, timeout, predicate)
     local deadline = os.clock() + timeout
 
     repeat
-        if not stillRunning(token, character) then
+        if not isCurrent(token, character) then
             return false
         end
 
@@ -269,18 +355,18 @@ local function enableHover(root)
     heldRoot = root
 
     attachment = Instance.new("Attachment")
-    attachment.Name = "CoopFarmAttachment"
+    attachment.Name = "MrThumbHoverAttachment"
     attachment.Parent = root
 
     align = Instance.new("AlignPosition")
-    align.Name = "CoopFarmHover"
+    align.Name = "MrThumbHover"
     align.Mode = Enum.PositionAlignmentMode.OneAttachment
     align.Attachment0 = attachment
     align.ApplyAtCenterOfMass = true
     align.RigidityEnabled = false
     align.ForceLimitMode = Enum.ForceLimitMode.PerAxis
 
-    -- Vertical force only; horizontal movement remains free.
+    -- Vertical force only.
     align.MaxAxesForce = Vector3.new(
         0,
         root.AssemblyMass * math.max(workspace.Gravity, 1) * 4,
@@ -289,11 +375,11 @@ local function enableHover(root)
 
     align.MaxVelocity = 20
     align.Responsiveness = 20
-    align.Position = root.Position + Vector3.new(0, height, 0)
+    align.Position = root.Position + Vector3.new(0, hoverHeight, 0)
     align.Parent = root
 end
 
-local function startFarm()
+local function startCoop()
     local character, root = getCharacter()
 
     if not character then
@@ -301,102 +387,120 @@ local function startFarm()
         return
     end
 
-    clearHover()
-    generation += 1
-
-    local token = generation
-    running = true
-    elapsed = 0
-
-    farmButton.Text = "CO-OP FARM: ON — CLICK TO STOP"
-    farmButton.BackgroundColor3 = Color3.fromRGB(52, 91, 111)
+    local token = begin("coop", character)
 
     task.spawn(function()
         local success, reason = pcall(function()
+            if not isCurrent(token, character) then
+                return
+            end
+
             status.Text = "1/3 • Moving to the portal approach."
+            moveCharacter(character, root, PORTAL)
 
-            local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
-            character:PivotTo(PORTAL * rootToPivot)
+            status.Text =
+                "1/3 • Waiting for Start.\nWalk into the portal if needed."
 
-            status.Text = "1/3 • Waiting for Start. Walk into the portal if needed."
+            local menuReady = waitFor(token, character, 25, function()
+                return findStartButton() ~= nil
+            end)
 
-            local foundMenu = waitFor(
-                token,
-                character,
-                MENU_TIMEOUT,
-                function()
-                    return findStartButton() ~= nil
-                end
-            )
-
-            if not stillRunning(token, character) then
+            if not isCurrent(token, character) then
                 return
             end
 
-            if not foundMenu then
-                stopFarm("Stopped • Start menu wasn't detected. Try again near the portal.")
+            if not menuReady then
+                stop("Stopped • Start menu wasn't detected.")
                 return
             end
 
-            local target = findStartButton()
-            if not target then
-                stopFarm("Stopped • Start menu disappeared before clicking.")
+            status.Text = "2/3 • Clicking Start once."
+            clickStart(token, character)
+
+            if not isCurrent(token, character) then
                 return
             end
 
-            status.Text = "2/3 • Clicking Start once. Waiting for arena arrival."
-            clickStart(target)
+            status.Text = "2/3 • Waiting for arena arrival."
 
-            local arrived = waitFor(
-                token,
-                character,
-                ARRIVAL_TIMEOUT,
-                function()
-                    local currentCharacter, currentRoot = getCharacter()
-                    return currentCharacter == character
-                        and currentRoot ~= nil
-                        and (currentRoot.Position - ARENA).Magnitude <= ARRIVAL_RADIUS
-                        and findStartButton() == nil
-                end
-            )
+            local arrived = waitFor(token, character, 30, function()
+                local currentCharacter, currentRoot = getCharacter()
+                return currentCharacter == character
+                    and currentRoot ~= nil
+                    and (currentRoot.Position - ARENA).Magnitude <= 100
+                    and findStartButton() == nil
+            end)
 
-            if not stillRunning(token, character) then
+            if not isCurrent(token, character) then
                 return
             end
 
             if not arrived then
-                stopFarm("Stopped • Arena arrival wasn't confirmed. Hover wasn't enabled.")
+                stop("Stopped • Arena arrival wasn't confirmed.")
                 return
             end
 
             local _, currentRoot = getCharacter()
+
             if not currentRoot then
-                stopFarm("Stopped • Character unavailable.")
+                stop("Stopped • Character unavailable.")
                 return
             end
 
             enableHover(currentRoot)
-            status.Text = "3/3 • Hover enabled. Check that auto-fight continues."
+            status.Text = "3/3 • Hover enabled. Verify auto-fight is working."
         end)
 
-        if not success and stillRunning(token, character) then
-            stopFarm("Stopped • An action failed. Check the console.")
+        if not success and isCurrent(token, character) then
+            stop("Stopped • Co-op action failed. Check the console.")
             warn("Co-op Farm:", reason)
         end
     end)
 end
 
-connect(farmButton.Activated, function()
-    if running then
-        stopFarm()
+local function startBag()
+    local character, root = getCharacter()
+
+    if not character then
+        status.Text = "Wait for your character to finish spawning."
+        return
+    end
+
+    begin("bag", character)
+
+    local success, reason = pcall(function()
+        moveCharacter(character, root, HACKER_BAG)
+    end)
+
+    if not success then
+        stop("Stopped • Hacker Bag movement failed.")
+        warn("Hacker Bag:", reason)
+        return
+    end
+
+    status.Text =
+        "HACKER BAG ON • AFK handling enabled.\nCheck that strength increases."
+end
+
+connect(coopButton.Activated, function()
+    if mode == "coop" then
+        stop("Co-op helper OFF • Gravity restored. Round may continue.")
     else
-        startFarm()
+        startCoop()
+    end
+end)
+
+connect(bagButton.Activated, function()
+    if mode == "bag" then
+        stop("Auto Farm OFF • Move out of the bag to stop game training.")
+    else
+        startBag()
     end
 end)
 
 local function changeHeight(amount)
-    height = math.clamp(height + amount, 2, 30)
-    heightLabel.Text = "Hover: " .. height .. " studs"
+    hoverHeight = math.clamp(hoverHeight + amount, 2, 30)
+    heightLabel.Text = "Hover: " .. hoverHeight .. " studs"
 end
 
 connect(minus.Activated, function()
@@ -407,22 +511,53 @@ connect(plus.Activated, function()
     changeHeight(2)
 end)
 
+connect(player.Idled, function()
+    if not mode then
+        return
+    end
+
+    local token = generation
+    attempts += 1
+    counter.Text = "Idle input attempts: " .. attempts
+
+    local success, reason = pcall(function()
+        local camera = workspace.CurrentCamera
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(
+            Vector2.new(0, 0),
+            camera and camera.CFrame or CFrame.new()
+        )
+    end)
+
+    if not success and generation == token then
+        stop("Stopped • Idle input unavailable in this environment.")
+        warn("AFK input:", reason)
+    end
+end)
+
 local refresh = 0
 
 connect(RunService.Heartbeat, function(delta)
-    if running then
+    if mode then
         elapsed += delta
 
-        local _, root = getCharacter()
-        if not root then
-            stopFarm("Stopped • Character unavailable.")
+        local character, root = getCharacter()
+
+        if character ~= activeCharacter or not root then
+            stop("Stopped • Character changed or died.")
+        elseif mode == "bag" then
+            if (root.Position - HACKER_BAG.Position).Magnitude > 50 then
+                stop("Stopped • You left the Hacker Bag area.")
+            end
         elseif align then
             if root ~= heldRoot or not align.Parent then
-                stopFarm("Stopped • Character or hover constraint changed.")
+                stop("Stopped • Hover constraint changed.")
+            elseif (root.Position - ARENA).Magnitude > 250 then
+                stop("Stopped • You moved away from the recorded arena.")
             else
                 align.Position = Vector3.new(
                     root.Position.X,
-                    baseline + height,
+                    baseline + hoverHeight,
                     root.Position.Z
                 )
             end
@@ -436,6 +571,7 @@ connect(RunService.Heartbeat, function(delta)
     refresh = 0
 
     local seconds = math.floor(elapsed)
+
     timer.Text = string.format(
         "%02d:%02d:%02d",
         math.floor(seconds / 3600),
@@ -443,20 +579,20 @@ connect(RunService.Heartbeat, function(delta)
         seconds % 60
     )
 
-    if running and align and heldRoot then
+    if mode == "coop" and align and heldRoot then
         status.Text = string.format(
-            "CO-OP FARM ON • Target +%d studs\nObserved height: %+.1f • Combat not verified",
-            height,
+            "CO-OP FARM ON • Target +%d studs\nObserved height: %+.1f • Verify combat manually.",
+            hoverHeight,
             heldRoot.Position.Y - baseline
         )
     end
 end)
 
 connect(player.CharacterRemoving, function()
-    stopFarm("Stopped • Character respawning.")
+    stop("Respawning • All helper actions stopped.")
 end)
 
--- Drag the heading with the mouse.
+-- Mouse dragging, with limits based on the actual panel size.
 local dragging = false
 local dragStart
 local panelStart
@@ -480,9 +616,11 @@ connect(UIS.InputChanged, function(input)
 
     if camera then
         local viewport = camera.ViewportSize
+        local size = panel.AbsoluteSize
+
         target = Vector2.new(
-            math.clamp(target.X, 0, math.max(0, viewport.X - 360)),
-            math.clamp(target.Y, 0, math.max(0, viewport.Y - 380))
+            math.clamp(target.X, 0, math.max(0, viewport.X - size.X)),
+            math.clamp(target.Y, 0, math.max(0, viewport.Y - size.Y))
         )
     end
 
@@ -496,7 +634,9 @@ connect(UIS.InputEnded, function(input)
 end)
 
 gui.Destroying:Connect(function()
-    stopFarm()
+    generation += 1
+    mode = nil
+    clearHover()
 
     for _, connection in ipairs(connections) do
         connection:Disconnect()
