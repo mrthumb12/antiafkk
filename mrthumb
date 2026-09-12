@@ -1,21 +1,40 @@
 local Players = game:GetService("Players")
-local UserInputService = game:GetService("UserInputService")
+local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local VirtualUser = game:GetService("VirtualUser")
+local GuiService = game:GetService("GuiService")
 
 local player = Players.LocalPlayer
 assert(player, "Run this in a Roblox client environment.")
 
 local playerGui = player:WaitForChild("PlayerGui")
-local previous = playerGui:FindFirstChild("AFKControlPanel")
-if previous then
-    previous:Destroy()
+
+-- Remove earlier versions of this panel and the old hover test.
+for _, name in ipairs({"CoopFarmPanel", "CoopHoverTest"}) do
+    local old = playerGui:FindFirstChild(name)
+    if old then
+        old:Destroy()
+    end
 end
 
-local enabled = false
+local PORTAL = CFrame.new(
+    3700.72412, 4.19242096, 31.2206383,
+    0.720672309, -1.08413456e-08, 0.693275869,
+    3.54668761e-09, 1, 1.19510091e-08,
+    -0.693275869, -6.15392848e-09, 0.720672309
+)
+
+local ARENA = Vector3.new(4011.11328, 6.52139521, -1314.0437)
+local ARRIVAL_RADIUS = 100
+local MENU_TIMEOUT = 25
+local ARRIVAL_TIMEOUT = 30
+
+local running = false
+local generation = 0
+local height = 8
 local elapsed = 0
-local attempts = 0
 local connections = {}
+local attachment, align, heldRoot
+local baseline = 0
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -23,7 +42,7 @@ local function connect(signal, callback)
     return connection
 end
 
-local function create(className, properties, parent)
+local function make(className, properties, parent)
     local object = Instance.new(className)
     for key, value in pairs(properties) do
         object[key] = value
@@ -32,169 +51,382 @@ local function create(className, properties, parent)
     return object
 end
 
-local gui = create("ScreenGui", {
-    Name = "AFKControlPanel",
+local gui = make("ScreenGui", {
+    Name = "CoopFarmPanel",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
 
-local panel = create("Frame", {
-    Size = UDim2.fromOffset(340, 285),
-    Position = UDim2.new(0.5, -170, 0.5, -142),
+local panel = make("Frame", {
+    Position = UDim2.new(0.5, -180, 0.5, -190),
+    Size = UDim2.fromOffset(360, 380),
     BackgroundColor3 = Color3.fromRGB(15, 19, 35),
     BorderSizePixel = 0,
     Active = true,
 }, gui)
 
-create("UICorner", {
-    CornerRadius = UDim.new(0, 18),
+make("UICorner", {
+    CornerRadius = UDim.new(0, 16),
 }, panel)
 
-create("UIStroke", {
-    Color = Color3.fromRGB(139, 108, 220),
-    Transparency = 0.25,
+make("UIStroke", {
+    Color = Color3.fromRGB(153, 119, 225),
     Thickness = 1,
 }, panel)
 
-local function label(text, y, height, size, color)
-    return create("TextLabel", {
-        Position = UDim2.fromOffset(22, y),
-        Size = UDim2.new(1, -44, 0, height),
+local function text(value, x, y, width, heightPx, size)
+    return make("TextLabel", {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(width, heightPx),
         BackgroundTransparency = 1,
-        Text = text,
-        TextColor3 = color,
-        TextSize = size,
+        Text = value,
+        TextColor3 = Color3.fromRGB(218, 220, 239),
         Font = Enum.Font.Gotham,
+        TextSize = size,
+        TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
     }, panel)
 end
 
--- Draggable heading.
-local title = label(
-    "AFK CONTROL", 12, 40, 18,
-    Color3.fromRGB(199, 180, 255)
-)
-title.Active = true
-title.Size = UDim2.fromOffset(156, 40)
+local function button(value, x, y, width)
+    local control = make("TextButton", {
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(width, 42),
+        BackgroundColor3 = Color3.fromRGB(112, 78, 183),
+        BorderSizePixel = 0,
+        Text = value,
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 13,
+        Font = Enum.Font.GothamBold,
+    }, panel)
 
--- Creator credit, beside the close button.
-create("TextLabel", {
-    Position = UDim2.new(1, -156, 0, 30),
-    Size = UDim2.fromOffset(106, 16),
-    BackgroundTransparency = 1,
-    Text = "created by mrthumb",
-    TextColor3 = Color3.fromRGB(199, 180, 255),
-    TextSize = 10,
-    Font = Enum.Font.Gotham,
-    TextXAlignment = Enum.TextXAlignment.Right,
-}, panel)
+    make("UICorner", {
+        CornerRadius = UDim.new(0, 10),
+    }, control)
 
-local close = create("TextButton", {
-    Position = UDim2.new(1, -46, 0, 14),
-    Size = UDim2.fromOffset(32, 32),
-    BackgroundTransparency = 1,
-    Text = "×",
-    TextSize = 25,
-    TextColor3 = Color3.fromRGB(210, 215, 235),
-    Font = Enum.Font.Gotham,
-}, panel)
-
-local status = label(
-    "OFF", 61, 24, 13,
-    Color3.fromRGB(160, 170, 193)
-)
-
-local timer = label(
-    "00:00:00", 91, 49, 35,
-    Color3.fromRGB(115, 225, 237)
-)
-timer.Font = Enum.Font.Code
-
-local counter = label(
-    "Input attempts: 0", 146, 22, 12,
-    Color3.fromRGB(195, 202, 222)
-)
-
-local detail = label(
-    "Waiting for you to turn it on.", 174, 22, 11,
-    Color3.fromRGB(160, 170, 193)
-)
-
-local toggle = create("TextButton", {
-    Position = UDim2.fromOffset(22, 210),
-    Size = UDim2.new(1, -44, 0, 42),
-    BackgroundColor3 = Color3.fromRGB(117, 82, 196),
-    Text = "TURN ON",
-    TextSize = 14,
-    TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.GothamBold,
-    BorderSizePixel = 0,
-    AutoButtonColor = true,
-}, panel)
-
-create("UICorner", {
-    CornerRadius = UDim.new(0, 10),
-}, toggle)
-
-label(
-    "Drag the heading • Session time counts while ON",
-    258, 17, 10,
-    Color3.fromRGB(150, 161, 186)
-)
-
-local function setEnabled(value)
-    enabled = value
-
-    toggle.Text = enabled and "TURN OFF" or "TURN ON"
-    toggle.BackgroundColor3 = enabled
-        and Color3.fromRGB(52, 91, 111)
-        or Color3.fromRGB(117, 82, 196)
-
-    status.Text = enabled and "ON • LISTENING FOR IDLE" or "OFF"
-    status.TextColor3 = enabled
-        and Color3.fromRGB(115, 225, 237)
-        or Color3.fromRGB(160, 170, 193)
-
-    detail.Text = enabled
-        and "Input is attempted when Roblox reports idle."
-        or "Paused. No new input attempts."
+    return control
 end
 
-connect(toggle.Activated, function()
-    setEnabled(not enabled)
-end)
+local title = text("CO-OP FARM", 20, 12, 170, 36, 19)
+title.Active = true
 
-connect(player.Idled, function()
-    if not enabled then
+text("created by mrthumb", 194, 20, 120, 20, 10)
+
+local close = button("×", 320, 14, 28)
+close.Size = UDim2.fromOffset(28, 28)
+
+local status = text("OFF • Ready to test.", 20, 63, 320, 44, 12)
+
+text("SESSION TIME", 20, 115, 320, 18, 10)
+
+local timer = text("00:00:00", 20, 137, 320, 43, 32)
+timer.Font = Enum.Font.Code
+timer.TextColor3 = Color3.fromRGB(115, 225, 237)
+
+local farmButton = button("CO-OP FARM: OFF", 20, 194, 320)
+
+local minus = button("−", 20, 251, 48)
+local heightLabel = text("Hover: 8 studs", 83, 251, 194, 42, 14)
+local plus = button("+", 292, 251, 48)
+
+text(
+    "Drag the heading • No hotkeys\n"
+    .. "OFF stops hovering, not the game round.\n"
+    .. "Combat remains the game's existing auto-fight.",
+    20, 310, 320, 52, 10
+)
+
+local function getCharacter()
+    local character = player.Character
+    if not character then
+        return nil, nil
+    end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    if not root or not humanoid or humanoid.Health <= 0 then
+        return nil, nil
+    end
+
+    return character, root
+end
+
+local function clearHover()
+    if align then
+        align:Destroy()
+        align = nil
+    end
+
+    if attachment then
+        attachment:Destroy()
+        attachment = nil
+    end
+
+    heldRoot = nil
+end
+
+local function stopFarm(message)
+    generation += 1
+    running = false
+    clearHover()
+
+    farmButton.Text = "CO-OP FARM: OFF"
+    farmButton.BackgroundColor3 = Color3.fromRGB(112, 78, 183)
+    status.Text = message or "OFF • Pending actions cancelled. Gravity restored."
+end
+
+local function stillRunning(token, character)
+    return running
+        and token == generation
+        and gui.Parent ~= nil
+        and player.Character == character
+end
+
+local function findStartButton()
+    local object = playerGui
+
+    for _, name in ipairs({
+        "ScreenGui",
+        "Menus",
+        "EndlessJoin",
+        "Container",
+        "Main",
+        "Join",
+        "TextLabel",
+    }) do
+        object = object:FindFirstChild(name)
+        if not object then
+            return nil
+        end
+    end
+
+    if not object:IsA("TextLabel") or object.Text ~= "Start" then
+        return nil
+    end
+
+    local label = object
+
+    while object and object ~= playerGui do
+        if object:IsA("GuiObject") and not object.Visible then
+            return nil
+        end
+
+        if object:IsA("ScreenGui") and not object.Enabled then
+            return nil
+        end
+
+        object = object.Parent
+    end
+
+    local target = label:FindFirstAncestorWhichIsA("GuiButton")
+
+    if target and target.AbsoluteSize.X > 0 and target.AbsoluteSize.Y > 0 then
+        return target
+    end
+
+    return nil
+end
+
+local function clickStart(target)
+    local position = target.AbsolutePosition
+    local size = target.AbsoluteSize
+    local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
+    local inset = Vector2.zero
+
+    if screen and not screen.IgnoreGuiInset then
+        inset = GuiService:GetGuiInset()
+    end
+
+    local x = position.X + size.X / 2 + inset.X
+    local y = position.Y + size.Y / 2 + inset.Y
+
+    local input = game:GetService("VirtualInputManager")
+    input:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+local function waitFor(token, character, timeout, predicate)
+    local deadline = os.clock() + timeout
+
+    repeat
+        if not stillRunning(token, character) then
+            return false
+        end
+
+        if predicate() then
+            return true
+        end
+
+        task.wait(0.1)
+    until os.clock() >= deadline
+
+    return false
+end
+
+local function enableHover(root)
+    baseline = root.Position.Y
+    heldRoot = root
+
+    attachment = Instance.new("Attachment")
+    attachment.Name = "CoopFarmAttachment"
+    attachment.Parent = root
+
+    align = Instance.new("AlignPosition")
+    align.Name = "CoopFarmHover"
+    align.Mode = Enum.PositionAlignmentMode.OneAttachment
+    align.Attachment0 = attachment
+    align.ApplyAtCenterOfMass = true
+    align.RigidityEnabled = false
+    align.ForceLimitMode = Enum.ForceLimitMode.PerAxis
+
+    -- Vertical force only; horizontal movement remains free.
+    align.MaxAxesForce = Vector3.new(
+        0,
+        root.AssemblyMass * math.max(workspace.Gravity, 1) * 4,
+        0
+    )
+
+    align.MaxVelocity = 20
+    align.Responsiveness = 20
+    align.Position = root.Position + Vector3.new(0, height, 0)
+    align.Parent = root
+end
+
+local function startFarm()
+    local character, root = getCharacter()
+
+    if not character then
+        status.Text = "Wait for your character to finish spawning."
         return
     end
 
-    attempts += 1
-    counter.Text = "Input attempts: " .. attempts
+    clearHover()
+    generation += 1
 
-    local success = pcall(function()
-        local camera = workspace.CurrentCamera
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton2(
-            Vector2.new(0, 0),
-            camera and camera.CFrame or CFrame.new()
-        )
+    local token = generation
+    running = true
+    elapsed = 0
+
+    farmButton.Text = "CO-OP FARM: ON — CLICK TO STOP"
+    farmButton.BackgroundColor3 = Color3.fromRGB(52, 91, 111)
+
+    task.spawn(function()
+        local success, reason = pcall(function()
+            status.Text = "1/3 • Moving to the portal approach."
+
+            local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
+            character:PivotTo(PORTAL * rootToPivot)
+
+            status.Text = "1/3 • Waiting for Start. Walk into the portal if needed."
+
+            local foundMenu = waitFor(
+                token,
+                character,
+                MENU_TIMEOUT,
+                function()
+                    return findStartButton() ~= nil
+                end
+            )
+
+            if not stillRunning(token, character) then
+                return
+            end
+
+            if not foundMenu then
+                stopFarm("Stopped • Start menu wasn't detected. Try again near the portal.")
+                return
+            end
+
+            local target = findStartButton()
+            if not target then
+                stopFarm("Stopped • Start menu disappeared before clicking.")
+                return
+            end
+
+            status.Text = "2/3 • Clicking Start once. Waiting for arena arrival."
+            clickStart(target)
+
+            local arrived = waitFor(
+                token,
+                character,
+                ARRIVAL_TIMEOUT,
+                function()
+                    local currentCharacter, currentRoot = getCharacter()
+                    return currentCharacter == character
+                        and currentRoot ~= nil
+                        and (currentRoot.Position - ARENA).Magnitude <= ARRIVAL_RADIUS
+                        and findStartButton() == nil
+                end
+            )
+
+            if not stillRunning(token, character) then
+                return
+            end
+
+            if not arrived then
+                stopFarm("Stopped • Arena arrival wasn't confirmed. Hover wasn't enabled.")
+                return
+            end
+
+            local _, currentRoot = getCharacter()
+            if not currentRoot then
+                stopFarm("Stopped • Character unavailable.")
+                return
+            end
+
+            enableHover(currentRoot)
+            status.Text = "3/3 • Hover enabled. Check that auto-fight continues."
+        end)
+
+        if not success and stillRunning(token, character) then
+            stopFarm("Stopped • An action failed. Check the console.")
+            warn("Co-op Farm:", reason)
+        end
     end)
+end
 
-    if success then
-        detail.Text = "Input call completed • acceptance unverified."
+connect(farmButton.Activated, function()
+    if running then
+        stopFarm()
     else
-        setEnabled(false)
-        status.Text = "INPUT UNAVAILABLE"
-        detail.Text = "This environment blocked the input call."
+        startFarm()
     end
 end)
 
+local function changeHeight(amount)
+    height = math.clamp(height + amount, 2, 30)
+    heightLabel.Text = "Hover: " .. height .. " studs"
+end
+
+connect(minus.Activated, function()
+    changeHeight(-2)
+end)
+
+connect(plus.Activated, function()
+    changeHeight(2)
+end)
+
 local refresh = 0
+
 connect(RunService.Heartbeat, function(delta)
-    if enabled then
+    if running then
         elapsed += delta
+
+        local _, root = getCharacter()
+        if not root then
+            stopFarm("Stopped • Character unavailable.")
+        elseif align then
+            if root ~= heldRoot or not align.Parent then
+                stopFarm("Stopped • Character or hover constraint changed.")
+            else
+                align.Position = Vector3.new(
+                    root.Position.X,
+                    baseline + height,
+                    root.Position.Z
+                )
+            end
+        end
     end
 
     refresh += delta
@@ -210,58 +442,62 @@ connect(RunService.Heartbeat, function(delta)
         math.floor(seconds / 60) % 60,
         seconds % 60
     )
+
+    if running and align and heldRoot then
+        status.Text = string.format(
+            "CO-OP FARM ON • Target +%d studs\nObserved height: %+.1f • Combat not verified",
+            height,
+            heldRoot.Position.Y - baseline
+        )
+    end
 end)
 
+connect(player.CharacterRemoving, function()
+    stopFarm("Stopped • Character respawning.")
+end)
+
+-- Drag the heading with the mouse.
 local dragging = false
-local dragInput
 local dragStart
 local panelStart
 
 connect(title.InputBegan, function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = true
-        dragInput = input
-        dragStart = Vector2.new(input.Position.X, input.Position.Y)
+        dragStart = UIS:GetMouseLocation()
         panelStart = panel.AbsolutePosition
     end
 end)
 
-connect(UserInputService.InputChanged, function(input)
-    if not dragging then
+connect(UIS.InputChanged, function(input)
+    if not dragging
+        or input.UserInputType ~= Enum.UserInputType.MouseMovement then
         return
     end
 
-    local isMouse = dragInput.UserInputType
-        == Enum.UserInputType.MouseButton1
+    local target = panelStart + UIS:GetMouseLocation() - dragStart
+    local camera = workspace.CurrentCamera
 
-    if (isMouse and input.UserInputType == Enum.UserInputType.MouseMovement)
-        or input == dragInput then
-        local position = Vector2.new(input.Position.X, input.Position.Y)
-        local target = panelStart + position - dragStart
-        local camera = workspace.CurrentCamera
-
-        if camera then
-            local viewport = camera.ViewportSize
-            target = Vector2.new(
-                math.clamp(target.X, 0, math.max(0, viewport.X - 340)),
-                math.clamp(target.Y, 0, math.max(0, viewport.Y - 285))
-            )
-        end
-
-        panel.Position = UDim2.fromOffset(target.X, target.Y)
+    if camera then
+        local viewport = camera.ViewportSize
+        target = Vector2.new(
+            math.clamp(target.X, 0, math.max(0, viewport.X - 360)),
+            math.clamp(target.Y, 0, math.max(0, viewport.Y - 380))
+        )
     end
+
+    panel.Position = UDim2.fromOffset(target.X, target.Y)
 end)
 
-connect(UserInputService.InputEnded, function(input)
-    if input == dragInput
-        or input.UserInputType == Enum.UserInputType.MouseButton1 then
+connect(UIS.InputEnded, function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
     end
 end)
 
 gui.Destroying:Connect(function()
-    enabled = false
+    stopFarm()
+
     for _, connection in ipairs(connections) do
         connection:Disconnect()
     end
