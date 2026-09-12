@@ -329,55 +329,78 @@ local function readRebirthState()
 end
 
 local function getRebirthButton()
-    local container, indicator = getRebirthControl()
+    local container = getRebirthControl()
 
-    if not container or not indicator or not isShown(indicator) then
-        error("Start training and make the game's Auto Rebirth bar visible.")
+    if not container or not isShown(container) then
+        error("Auto Rebirth control is not visible.")
     end
-
-    local target
 
     if container:IsA("GuiButton") then
-        target = container
-    elseif indicator:IsA("GuiButton") then
-        target = indicator
-    else
-        target = indicator:FindFirstAncestorWhichIsA("GuiButton")
+        return container
     end
 
-    if not target
-        or not (target == container or target:IsDescendantOf(container)) then
-        error("Couldn't identify a button inside AutoRebirthBtn.")
+    local candidates = {}
+    for _, object in ipairs(container:GetDescendants()) do
+        if object:IsA("GuiButton") and isShown(object) then
+            table.insert(candidates, object)
+        end
     end
 
-    return target
+    if #candidates == 0 then
+        error("No clickable GuiButton found inside " .. container:GetFullName())
+    end
+
+    for _, object in ipairs(candidates) do
+        if object.Name == "Toggle" or object.Name == "AutoRebirthBtn" then
+            return object
+        end
+    end
+
+    return candidates[1]
 end
 
 local function sendClick(target)
     if not target or not isShown(target) then
-        error("The target button isn't visible.")
+        error("The Auto Rebirth target is not visible.")
     end
 
-    local position = target.AbsolutePosition
-    local size = target.AbsoluteSize
-
-    if size.X <= 0 or size.Y <= 0 then
-        error("The target button has no visible size.")
+    if not target:IsA("GuiButton") then
+        error("Auto Rebirth target is not a GuiButton: " .. target:GetFullName())
     end
 
-    local screen = target:FindFirstAncestorWhichIsA("ScreenGui")
-    local inset = Vector2.zero
+    pcall(function()
+        target:Activate()
+    end)
 
-    if screen and not screen.IgnoreGuiInset then
-        inset = GuiService:GetGuiInset()
+    task.wait(0.2)
+    if readRebirthState() == true then
+        return true
     end
 
-    local x = position.X + size.X / 2 + inset.X
-    local y = position.Y + size.Y / 2 + inset.Y
+    if typeof(getconnections) == "function" and typeof(firesignal) == "function" then
+        local signals = {target.Activated}
+        if target:IsA("TextButton") or target:IsA("ImageButton") then
+            table.insert(signals, target.MouseButton1Click)
+        end
 
-    local input = game:GetService("VirtualInputManager")
-    input:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    input:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        for _, signal in ipairs(signals) do
+            for _, connection in ipairs(getconnections(signal)) do
+                pcall(function()
+                    if connection.Function then
+                        connection.Function()
+                    else
+                        firesignal(signal)
+                    end
+                end)
+                task.wait(0.15)
+                if readRebirthState() == true then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
 end
 
 -- Shared click lock: hide only this helper while clicking game UI.
@@ -417,7 +440,7 @@ local function refreshRebirthButton()
     local state = readRebirthState()
 
     if state == nil then
-        rebirthButton.Text = "AUTO REBIRTH: UNAVAILABLE"
+        rebirthButton.Text = "AUTO REBIRTH: WAITING..."
         rebirthButton.BackgroundColor3 = Color3.fromRGB(70, 72, 94)
     else
         rebirthButton.Text = state
@@ -428,6 +451,73 @@ local function refreshRebirthButton()
             and Color3.fromRGB(52, 91, 111)
             or Color3.fromRGB(112, 78, 183)
     end
+end
+
+-- Automatically enable the game's Auto Rebirth setting.
+-- This only clicks when the game clearly reports that it is OFF.
+local function ensureRebirthOn()
+    if closed or rebirthBusy or clickBusy then
+        return false
+    end
+
+    local current = readRebirthState()
+
+    if current == nil then
+        return false
+    end
+
+    if current == true then
+        refreshRebirthButton()
+        return true
+    end
+
+    rebirthBusy = true
+    refreshRebirthButton()
+
+    local success, reason = withPanelHidden(function()
+        local latest = readRebirthState()
+
+        if latest == nil then
+            error("Auto Rebirth state is unavailable.")
+        end
+
+        if latest == false then
+            local clicked = sendClick(getRebirthButton())
+            if not clicked then
+                error("The Auto Rebirth button was found, but its game callback did not respond.")
+            end
+        end
+    end)
+
+    if closed then
+        return false
+    end
+
+    if success then
+        local deadline = os.clock() + 3
+
+        while not closed
+            and readRebirthState() ~= true
+            and os.clock() < deadline do
+            task.wait(0.1)
+        end
+
+        local enabled = readRebirthState() == true
+
+        rebirthHint.Text = enabled
+            and "Auto Rebirth automatically enabled."
+            or "Auto Rebirth click wasn't confirmed."
+
+        rebirthBusy = false
+        refreshRebirthButton()
+        return enabled
+    end
+
+    rebirthBusy = false
+    refreshRebirthButton()
+    rebirthHint.Text = "Couldn't enable Auto Rebirth. Check the console."
+    warn("Auto Rebirth:", reason)
+    return false
 end
 
 local function waitFor(token, character, timeout, predicate)
@@ -563,7 +653,7 @@ local function startCoop()
             end
 
             enableHover(currentRoot)
-            status.Text = "3/3 • Hover enabled. Verify combat manually."
+            status.Text = "3/3 • Hover enabled. Co-op Farm active."
         end)
 
         if not success and isCurrent(token, character) then
@@ -598,7 +688,30 @@ local function startBag()
     end
 
     status.Text =
-        "HACKER BAG ON • AFK handling enabled.\nCheck that strength increases."
+        "HACKER BAG ON • AFK handling enabled.\nEnabling Auto Rebirth..."
+
+    local token = generation
+
+    task.spawn(function()
+        local deadline = os.clock() + 10
+
+        repeat
+            if closed or mode ~= "bag" or token ~= generation then
+                return
+            end
+
+            if ensureRebirthOn() then
+                status.Text = "HACKER BAG ON • Auto Rebirth ON.\nAFK farming active."
+                return
+            end
+
+            task.wait(0.5)
+        until os.clock() >= deadline
+
+        if not closed and mode == "bag" and token == generation then
+            status.Text = "HACKER BAG ON • Waiting for Auto Rebirth..."
+        end
+    end)
 end
 
 connect(coopButton.Activated, function()
@@ -718,6 +831,7 @@ connect(player.Idled, function()
 end)
 
 local refresh = 0
+local autoRebirthCheck = 0
 
 connect(RunService.Heartbeat, function(delta)
     if mode then
@@ -747,6 +861,20 @@ connect(RunService.Heartbeat, function(delta)
     end
 
     refresh += delta
+    autoRebirthCheck += delta
+
+    if autoRebirthCheck >= 1 then
+        autoRebirthCheck = 0
+
+        -- Auto Rebirth is ONLY managed automatically by Hacker Bag.
+        -- Co-op Farm will never open/click the game's Auto Rebirth control.
+        if mode == "bag" and not rebirthBusy and not clickBusy then
+            task.spawn(function()
+                ensureRebirthOn()
+            end)
+        end
+    end
+
     if refresh < 0.25 then
         return
     end
