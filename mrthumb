@@ -9,7 +9,7 @@ assert(player, "Run this in a Roblox client environment.")
 local playerGui = player:WaitForChild("PlayerGui")
 
 for _, name in ipairs({
-    "MrThumbFarmPanel", "CoopFarmPanel",
+    "ThumbsHubPanel", "CoopFarmPanel",
     "CoopHoverTest", "AFKControlPanel",
 }) do
     local previous = playerGui:FindFirstChild(name)
@@ -56,7 +56,7 @@ local minimized = false
 local connections = {}
 
 -- V3 monitoring / settings
-local settingsFile = "mrthumb_farm_settings.json"
+local settingsFile = "thumbshub_settings.json"
 local totalRecoveries = 0
 local lastAction = "Idle"
 local watchdogStatus = "WAITING"
@@ -90,13 +90,25 @@ local function make(className, properties, parent)
     return object
 end
 
+local function addGradient(parent, rotation, c1, c2)
+    local gradient = Instance.new("UIGradient")
+    gradient.Rotation = rotation or 0
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, c1),
+        ColorSequenceKeypoint.new(0.52, c2),
+        ColorSequenceKeypoint.new(1, c1),
+    })
+    gradient.Parent = parent
+    return gradient
+end
+
 -- ============================================================
 -- CLEAN UI / STARTUP SPLASH
 -- Startup splash prominently credits the creator: MADE BY REALLYCOOLJOSH
 -- ============================================================
 
 local loadingGui = make("ScreenGui", {
-    Name = "MrThumbFarmLoading",
+    Name = "ThumbsHubLoading",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -104,20 +116,21 @@ local loadingGui = make("ScreenGui", {
 
 local loadingShade = make("Frame", {
     Size = UDim2.fromScale(1, 1),
-    BackgroundColor3 = Color3.fromRGB(10, 12, 24),
+    BackgroundColor3 = Color3.fromRGB(8, 9, 20),
     BorderSizePixel = 0,
 }, loadingGui)
 
 make("UICorner", {
     CornerRadius = UDim.new(0, 18),
 }, loadingShade)
+addGradient(loadingShade, 135, Color3.fromRGB(8, 9, 20), Color3.fromRGB(28, 10, 48))
 
 local loadingTitle = make("TextLabel", {
     AnchorPoint = Vector2.new(0.5, 0.5),
     Position = UDim2.fromScale(0.5, 0.43),
     Size = UDim2.fromOffset(360, 50),
     BackgroundTransparency = 1,
-    Text = "FARM CONTROL",
+    Text = "THUMBSHUB",
     TextColor3 = Color3.fromRGB(235, 236, 248),
     Font = Enum.Font.GothamBold,
     TextSize = 28,
@@ -129,7 +142,7 @@ local loadingStatus = make("TextLabel", {
     Size = UDim2.fromOffset(360, 30),
     BackgroundTransparency = 1,
     Text = "Loading",
-    TextColor3 = Color3.fromRGB(153, 119, 225),
+    TextColor3 = Color3.fromRGB(120, 220, 255),
     Font = Enum.Font.Gotham,
     TextSize = 16,
 }, loadingShade)
@@ -140,7 +153,7 @@ local loadingCredit = make("TextLabel", {
     Size = UDim2.fromOffset(420, 34),
     BackgroundTransparency = 1,
     Text = "MADE BY REALLYCOOLJOSH",
-    TextColor3 = Color3.fromRGB(190, 160, 255),
+    TextColor3 = Color3.fromRGB(255, 120, 220),
     Font = Enum.Font.GothamBold,
     TextSize = 15,
 }, loadingShade)
@@ -156,7 +169,7 @@ task.spawn(function()
 end)
 
 local gui = make("ScreenGui", {
-    Name = "MrThumbFarmPanel",
+    Name = "ThumbsHubPanel",
     ResetOnSpawn = false,
     IgnoreGuiInset = true,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -167,7 +180,7 @@ gui.Enabled = false
 local panel = make("Frame", {
     Position = UDim2.new(0.5, -205, 0.5, -295),
     Size = UDim2.fromOffset(410, 590),
-    BackgroundColor3 = Color3.fromRGB(14, 18, 34),
+    BackgroundColor3 = Color3.fromRGB(12, 14, 30),
     BorderSizePixel = 0,
     Active = true,
 }, gui)
@@ -177,7 +190,7 @@ make("UICorner", {
 }, panel)
 
 make("UIStroke", {
-    Color = Color3.fromRGB(77, 67, 105),
+    Color = Color3.fromRGB(96, 76, 160),
     Thickness = 1,
 }, panel)
 
@@ -187,7 +200,7 @@ local function text(value, x, y, width, height, size, bold)
         Size = UDim2.fromOffset(width, height),
         BackgroundTransparency = 1,
         Text = value,
-        TextColor3 = Color3.fromRGB(219, 222, 238),
+        TextColor3 = Color3.fromRGB(236, 239, 255),
         Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham,
         TextSize = size,
         TextWrapped = true,
@@ -200,10 +213,10 @@ local function button(value, x, y, width, height)
     local control = make("TextButton", {
         Position = UDim2.fromOffset(x, y),
         Size = UDim2.fromOffset(width, height or 42),
-        BackgroundColor3 = Color3.fromRGB(74, 58, 120),
+        BackgroundColor3 = Color3.fromRGB(93, 55, 165),
         BorderSizePixel = 0,
         Text = value,
-        TextColor3 = Color3.fromRGB(248, 248, 252),
+        TextColor3 = Color3.fromRGB(255, 255, 255),
         TextSize = 12,
         Font = Enum.Font.GothamBold,
         AutoButtonColor = true,
@@ -212,26 +225,28 @@ local function button(value, x, y, width, height)
     make("UICorner", {
         CornerRadius = UDim.new(0, 11),
     }, control)
+    addGradient(control, 0, Color3.fromRGB(72, 48, 145), Color3.fromRGB(122, 58, 190))
 
     return control
 end
 
-local title = text("FARM CONTROL", 22, 16, 200, 30, 19, true)
+local title = text("THUMBSHUB", 22, 16, 220, 30, 20, true)
 title.Active = true
+addGradient(title, 0, Color3.fromRGB(90, 235, 255), Color3.fromRGB(255, 105, 220))
 
 local minimizeButton = button("—", 330, 16, 28, 28)
 local closeButton = button("×", 364, 16, 28, 28)
 
 local status = text("OFF • Choose a farming mode.", 22, 54, 348, 34, 11)
-status.TextColor3 = Color3.fromRGB(175, 181, 201)
+status.TextColor3 = Color3.fromRGB(177, 190, 220)
 
 text("SESSION", 22, 92, 90, 15, 9, true)
 local timer = text("00:00:00", 22, 108, 175, 38, 25, true)
 timer.Font = Enum.Font.Code
-timer.TextColor3 = Color3.fromRGB(115, 225, 237)
+timer.TextColor3 = Color3.fromRGB(100, 235, 255)
 
 local counter = text("Idle inputs  •  0", 218, 114, 170, 24, 9, false)
-counter.TextColor3 = Color3.fromRGB(155, 161, 181)
+counter.TextColor3 = Color3.fromRGB(154, 171, 205)
 
 text("FARM", 22, 154, 80, 15, 9, true)
 local coopButton = button("CO-OP  •  OFF", 22, 173, 174, 42)
@@ -243,18 +258,18 @@ local plus = button("+", 344, 228, 44, 38)
 
 local rebirthButton = button("AUTO REBIRTH  •  CHECKING", 22, 278, 366, 40)
 local rebirthHint = text("Mirrors the game's current setting.", 22, 321, 366, 20, 9, false)
-rebirthHint.TextColor3 = Color3.fromRGB(145, 151, 172)
+rebirthHint.TextColor3 = Color3.fromRGB(142, 161, 194)
 
 text("AUTOMATION", 22, 352, 100, 15, 9, true)
 local farmForeverButton = button("FARM FOREVER  •  ON", 22, 371, 174, 40)
 local recoverButton = button("AUTO RECOVER  •  ON", 214, 371, 174, 40)
 
 local stopButton = button("STOP ALL", 22, 422, 366, 40)
-stopButton.BackgroundColor3 = Color3.fromRGB(126, 46, 59)
+stopButton.BackgroundColor3 = Color3.fromRGB(145, 45, 90)
 
 text("SESSION STATS", 22, 470, 130, 15, 9, true)
 local sessionStats = text("Rebirths  •  0     Rate  •  0.0/hr", 22, 488, 366, 22, 10, false)
-sessionStats.TextColor3 = Color3.fromRGB(193, 197, 214)
+sessionStats.TextColor3 = Color3.fromRGB(198, 208, 235)
 
 local statsLabel = text(
     "Farm  •  IDLE     Watchdog  •  WAITING\n"
@@ -262,10 +277,10 @@ local statsLabel = text(
     .. "Recoveries  •  0",
     22, 515, 366, 48, 9, false
 )
-statsLabel.TextColor3 = Color3.fromRGB(155, 161, 181)
+statsLabel.TextColor3 = Color3.fromRGB(154, 171, 205)
 
 local toast = text("", 22, 564, 366, 18, 8, false)
-toast.TextColor3 = Color3.fromRGB(190, 160, 255)
+toast.TextColor3 = Color3.fromRGB(255, 120, 220)
 
 local function showNotification(message)
     notificationId += 1
@@ -888,7 +903,7 @@ local function refreshRebirthButton()
 
     if state == nil then
         rebirthButton.Text = "AUTO REBIRTH: WAITING..."
-        rebirthButton.BackgroundColor3 = Color3.fromRGB(70, 72, 94)
+        rebirthButton.BackgroundColor3 = Color3.fromRGB(62, 65, 96)
     else
         rebirthButton.Text = state
             and "AUTO REBIRTH: ON"
@@ -1008,11 +1023,11 @@ local function enableHover(root)
     heldRoot = root
 
     attachment = Instance.new("Attachment")
-    attachment.Name = "MrThumbHoverAttachment"
+    attachment.Name = "ThumbsHubHoverAttachment"
     attachment.Parent = root
 
     align = Instance.new("AlignPosition")
-    align.Name = "MrThumbHover"
+    align.Name = "ThumbsHubHover"
     align.Mode = Enum.PositionAlignmentMode.OneAttachment
     align.Attachment0 = attachment
     align.ApplyAtCenterOfMass = true
@@ -1588,3 +1603,6 @@ if not closed then
     loadingGui:Destroy()
     gui.Enabled = true
 end
+
+-- GitHub loader for this script (use this in your executor):
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/mrthumb12/antiafkk/refs/heads/main/mrthumb"))()
