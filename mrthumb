@@ -1,7 +1,6 @@
 local Players = game:GetService("Players")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
@@ -25,12 +24,17 @@ local PORTAL = CFrame.new(
     -0.693275869, -6.15392848e-09, 0.720672309
 )
 
+-- Bag fallback only. AUTO FARM now scans every TrainingZone and chooses
+-- the highest-multiplier zone whose StatusLabel says "Unlocked".
 local HACKER_BAG = CFrame.new(
-    3843.64185, 5.34242582, 93.6269455,
-    -0.054018259, 9.29440276e-08, -0.998539925,
-    4.49063009e-12, 1, 9.30796915e-08,
-    0.998539925, 5.02351938e-09, -0.054018259
+    4593.568359, 5.342426, 93.152916
 )
+
+local activeBagCFrame = HACKER_BAG
+local activeBagName = "Fallback Bag"
+local activeBagMultiplier = 0
+local bestBagScanAt = 0
+local BEST_BAG_RESCAN_INTERVAL = 8
 
 local ARENA = Vector3.new(4011.11328, 6.52139521, -1314.0437)
 
@@ -52,16 +56,19 @@ local desiredMode = nil
 local farmForever = true
 local autoRecover = true
 local recovering = false
+local miscWalkSpeed = 16
+local miscWalkSpeedEnabled = false
+local noclipEnabled = false
+local noclipCache = {}
 local minimized = false
 local connections = {}
 
 -- V3 monitoring / settings
 local settingsFile = "thumbshub_settings.json"
 local totalRecoveries = 0
-local lastAction = "Idle"
+local _lastAction = "Idle"
 local watchdogStatus = "WAITING"
 local lastWatchdog = 0
-local notificationId = 0
 local sessionStart = os.clock()
 local sessionRebirths = 0
 local lastObservedRebirth = nil
@@ -74,6 +81,15 @@ local lastRebirthDisplay = nil
 local lastStatsScan = 0
 local recoveryCooldown = 5
 local nextRecoveryAllowed = 0
+
+-- Auto Farm Wins
+local winsStageIndex = 1
+local winsHighestStage = 0
+local winsLoopToken = 0
+local winsCollecting = false
+local WINS_STAGE_TIMEOUT = 30
+local WINS_STAGE_SETTLE = 1.5
+local WINS_CLEAR_CONFIRM = 1.0
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -178,23 +194,58 @@ local gui = make("ScreenGui", {
 gui.Enabled = false
 
 local panel = make("Frame", {
-    Position = UDim2.new(0.5, -205, 0.5, -295),
-    Size = UDim2.fromOffset(410, 590),
-    BackgroundColor3 = Color3.fromRGB(12, 14, 30),
+    Position = UDim2.new(0.5, -350, 0.5, -365),
+    Size = UDim2.fromOffset(700, 820),
+    BackgroundColor3 = Color3.fromRGB(7, 9, 18),
     BorderSizePixel = 0,
     Active = true,
 }, gui)
 
-make("UICorner", {
-    CornerRadius = UDim.new(0, 18),
-}, panel)
-
+make("UICorner", {CornerRadius = UDim.new(0, 24)}, panel)
 make("UIStroke", {
-    Color = Color3.fromRGB(96, 76, 160),
-    Thickness = 1,
+    Color = Color3.fromRGB(91, 78, 167),
+    Thickness = 1.35,
+    Transparency = 0.08,
 }, panel)
 
-local function text(value, x, y, width, height, size, bold)
+local panelGlow = make("Frame", {
+    Position = UDim2.fromOffset(0, 0),
+    Size = UDim2.new(1, 0, 0, 4),
+    BackgroundColor3 = Color3.fromRGB(95, 230, 255),
+    BorderSizePixel = 0,
+}, panel)
+make("UICorner", {CornerRadius = UDim.new(0, 24)}, panelGlow)
+addGradient(panelGlow, 0, Color3.fromRGB(60, 235, 255), Color3.fromRGB(255, 78, 218))
+
+local header = make("Frame", {
+    Position = UDim2.fromOffset(14, 12),
+    Size = UDim2.new(1, -28, 0, 82),
+    BackgroundColor3 = Color3.fromRGB(13, 17, 34),
+    BorderSizePixel = 0,
+}, panel)
+make("UICorner", {CornerRadius = UDim.new(0, 18)}, header)
+make("UIStroke", {Color = Color3.fromRGB(51, 64, 111), Thickness = 1}, header)
+addGradient(header, 135, Color3.fromRGB(14, 24, 48), Color3.fromRGB(43, 16, 52))
+
+local logoDot = make("Frame", {
+    Position = UDim2.fromOffset(16, 18),
+    Size = UDim2.fromOffset(46, 46),
+    BackgroundColor3 = Color3.fromRGB(24, 29, 54),
+    BorderSizePixel = 0,
+}, header)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, logoDot)
+addGradient(logoDot, 135, Color3.fromRGB(63, 229, 255), Color3.fromRGB(233, 87, 213))
+
+make("TextLabel", {
+    Size = UDim2.fromScale(1, 1),
+    BackgroundTransparency = 1,
+    Text = "T",
+    TextColor3 = Color3.fromRGB(255,255,255),
+    Font = Enum.Font.GothamBlack,
+    TextSize = 26,
+}, logoDot)
+
+local function text(value, x, y, width, height, size, bold, parent)
     return make("TextLabel", {
         Position = UDim2.fromOffset(x, y),
         Size = UDim2.fromOffset(width, height),
@@ -206,92 +257,492 @@ local function text(value, x, y, width, height, size, bold)
         TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Center,
-    }, panel)
+    }, parent or panel)
 end
 
-local function button(value, x, y, width, height)
-    local control = make("TextButton", {
-        Position = UDim2.fromOffset(x, y),
-        Size = UDim2.fromOffset(width, height or 42),
-        BackgroundColor3 = Color3.fromRGB(93, 55, 165),
+local title = text("THUMBSHUB", 78, 14, 310, 32, 25, true, header)
+addGradient(title, 0, Color3.fromRGB(95, 236, 255), Color3.fromRGB(255, 107, 222))
+local brandTag = text("ULTIMATE FARMING HUB  •  V36", 78, 43, 320, 18, 9, true, header)
+brandTag.TextColor3 = Color3.fromRGB(145, 160, 198)
+
+local headerStatus = make("TextLabel", {
+    Position = UDim2.fromOffset(505, 15),
+    Size = UDim2.fromOffset(120, 26),
+    BackgroundColor3 = Color3.fromRGB(21, 47, 47),
+    Text = "●  ONLINE",
+    TextColor3 = Color3.fromRGB(111, 248, 185),
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+    TextXAlignment = Enum.TextXAlignment.Center,
+}, header)
+make("UICorner", {CornerRadius = UDim.new(1, 0)}, headerStatus)
+
+local minimizeButton = make("TextButton", {
+    Position = UDim2.fromOffset(559, 50),
+    Size = UDim2.fromOffset(29, 25),
+    BackgroundColor3 = Color3.fromRGB(37, 41, 68),
+    BorderSizePixel = 0,
+    Text = "—",
+    TextColor3 = Color3.fromRGB(215, 222, 247),
+    Font = Enum.Font.GothamBold,
+    TextSize = 13,
+}, header)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, minimizeButton)
+
+local closeButton = make("TextButton", {
+    Position = UDim2.fromOffset(593, 50),
+    Size = UDim2.fromOffset(29, 25),
+    BackgroundColor3 = Color3.fromRGB(62, 31, 59),
+    BorderSizePixel = 0,
+    Text = "×",
+    TextColor3 = Color3.fromRGB(255, 195, 239),
+    Font = Enum.Font.GothamBold,
+    TextSize = 14,
+}, header)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, closeButton)
+
+-- ============================================================
+-- THUMBSHUB V36 • UNIQUE TABBED HUB UI
+-- Home / Farming / Misc
+-- ============================================================
+
+local rail = make("Frame", {
+    Position = UDim2.fromOffset(14, 104),
+    Size = UDim2.fromOffset(150, 702),
+    BackgroundColor3 = Color3.fromRGB(10, 13, 27),
+    BorderSizePixel = 0,
+}, panel)
+make("UICorner", {CornerRadius = UDim.new(0, 18)}, rail)
+make("UIStroke", {Color = Color3.fromRGB(47, 58, 102), Thickness = 1}, rail)
+
+local railTitle = text("THUMBSHUB", 16, 18, 118, 20, 10, true, rail)
+railTitle.TextColor3 = Color3.fromRGB(105, 233, 255)
+local railSub = text("CONTROL CENTER", 16, 36, 118, 16, 7, true, rail)
+railSub.TextColor3 = Color3.fromRGB(105, 119, 158)
+
+local navHome, navFarming, navMisc
+local activePage = "home"
+
+local function makeNavButton(label, icon, y)
+    local btn = make("TextButton", {
+        Position = UDim2.fromOffset(10, y),
+        Size = UDim2.new(1, -20, 0, 48),
+        BackgroundColor3 = Color3.fromRGB(15, 18, 34),
         BorderSizePixel = 0,
-        Text = value,
-        TextColor3 = Color3.fromRGB(255, 255, 255),
-        TextSize = 12,
+        Text = "",
+        AutoButtonColor = false,
+    }, rail)
+    make("UICorner", {CornerRadius = UDim.new(0, 12)}, btn)
+
+    local iconLabel = make("TextLabel", {
+        Position = UDim2.fromOffset(11, 0),
+        Size = UDim2.fromOffset(26, 48),
+        BackgroundTransparency = 1,
+        Text = icon,
+        TextColor3 = Color3.fromRGB(108, 123, 164),
         Font = Enum.Font.GothamBold,
-        AutoButtonColor = true,
-    }, panel)
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Center,
+    }, btn)
 
-    make("UICorner", {
-        CornerRadius = UDim.new(0, 11),
-    }, control)
-    addGradient(control, 0, Color3.fromRGB(72, 48, 145), Color3.fromRGB(122, 58, 190))
+    local labelText = text(label, 42, 0, 92, 48, 9, true, btn)
+    labelText.TextColor3 = Color3.fromRGB(147, 160, 193)
 
-    return control
+    return btn, iconLabel, labelText
 end
 
-local title = text("THUMBSHUB", 22, 16, 220, 30, 20, true)
-title.Active = true
-addGradient(title, 0, Color3.fromRGB(90, 235, 255), Color3.fromRGB(255, 105, 220))
+navHome = makeNavButton("Home", "⌂", 76)
+navFarming = makeNavButton("Farming", "⚡", 132)
+navMisc = makeNavButton("Misc", "⚙", 188)
 
-local minimizeButton = button("—", 330, 16, 28, 28)
-local closeButton = button("×", 364, 16, 28, 28)
+local railNote = make("Frame", {
+    Position = UDim2.fromOffset(10, 528),
+    Size = UDim2.new(1, -20, 0, 115),
+    BackgroundColor3 = Color3.fromRGB(14, 18, 36),
+    BorderSizePixel = 0,
+}, rail)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, railNote)
+make("UIStroke", {Color = Color3.fromRGB(56, 67, 111), Thickness = 1}, railNote)
 
-local status = text("OFF • Choose a farming mode.", 22, 54, 348, 34, 11)
-status.TextColor3 = Color3.fromRGB(177, 190, 220)
-
-text("SESSION", 22, 92, 90, 15, 9, true)
-local timer = text("00:00:00", 22, 108, 175, 38, 25, true)
-timer.Font = Enum.Font.Code
-timer.TextColor3 = Color3.fromRGB(100, 235, 255)
-
-local counter = text("Idle inputs  •  0", 218, 114, 170, 24, 9, false)
-counter.TextColor3 = Color3.fromRGB(154, 171, 205)
-
-text("FARM", 22, 154, 80, 15, 9, true)
-local coopButton = button("CO-OP  •  OFF", 22, 173, 174, 42)
-local bagButton = button("HACKER BAG  •  OFF", 208, 173, 180, 42)
-
-local minus = button("−", 22, 228, 44, 38)
-local heightLabel = text("Hover  •  8 studs", 78, 228, 250, 38, 11, false)
-local plus = button("+", 344, 228, 44, 38)
-
-local rebirthButton = button("AUTO REBIRTH  •  CHECKING", 22, 278, 366, 40)
-local rebirthHint = text("Mirrors the game's current setting.", 22, 321, 366, 20, 9, false)
-rebirthHint.TextColor3 = Color3.fromRGB(142, 161, 194)
-
-text("AUTOMATION", 22, 352, 100, 15, 9, true)
-local farmForeverButton = button("FARM FOREVER  •  ON", 22, 371, 174, 40)
-local recoverButton = button("AUTO RECOVER  •  ON", 214, 371, 174, 40)
-
-local stopButton = button("STOP ALL", 22, 422, 366, 40)
-stopButton.BackgroundColor3 = Color3.fromRGB(145, 45, 90)
-
-text("SESSION STATS", 22, 470, 130, 15, 9, true)
-local sessionStats = text("Rebirths  •  0     Rate  •  0.0/hr", 22, 488, 366, 22, 10, false)
-sessionStats.TextColor3 = Color3.fromRGB(198, 208, 235)
-
-local statsLabel = text(
-    "Farm  •  IDLE     Watchdog  •  WAITING\n"
-    .. "Strength  •  unavailable     Gain/hr  •  unavailable\n"
-    .. "Recoveries  •  0",
-    22, 515, 366, 48, 9, false
+local noteHeader = text("EARLY RELEASE", 12, 10, 116, 18, 8, true, railNote)
+noteHeader.TextColor3 = Color3.fromRGB(255, 120, 219)
+local noteBody = text(
+    "Some features may change.\nExpect bugs while ThumbsHub is\nbeing improved.",
+    12, 32, 116, 54, 7, false, railNote
 )
-statsLabel.TextColor3 = Color3.fromRGB(154, 171, 205)
+noteBody.TextColor3 = Color3.fromRGB(124, 141, 181)
+noteBody.TextYAlignment = Enum.TextYAlignment.Top
+local noteVersion = text("V36 • PRE-RELEASE", 12, 88, 116, 16, 6, true, railNote)
+noteVersion.TextColor3 = Color3.fromRGB(91, 207, 239)
 
-local toast = text("", 22, 564, 366, 18, 8, false)
-toast.TextColor3 = Color3.fromRGB(255, 120, 220)
+local content = make("Frame", {
+    Position = UDim2.fromOffset(178, 104),
+    Size = UDim2.new(1, -192, 0, 702),
+    BackgroundTransparency = 1,
+}, panel)
 
-local function showNotification(message)
-    notificationId += 1
-    local id = notificationId
-    toast.Text = "• " .. message
-    task.delay(3, function()
-        if not closed and id == notificationId then
-            toast.Text = ""
-        end
-    end)
+local function makePage()
+    local page = make("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Visible = false,
+    }, content)
+    return page
 end
+
+local homePage = makePage()
+local farmingPage = makePage()
+local miscPage = makePage()
+
+local function heading(parent, kicker, titleText, subtitle)
+    local kickerLabel = text(kicker, 0, 3, 500, 18, 8, true, parent)
+    kickerLabel.TextColor3 = Color3.fromRGB(108, 225, 255)
+    local titleLabel = text(titleText, 0, 23, 500, 38, 22, true, parent)
+    titleLabel.TextColor3 = Color3.fromRGB(241, 244, 255)
+    local subLabel = text(subtitle, 0, 60, 500, 24, 8, false, parent)
+    subLabel.TextColor3 = Color3.fromRGB(118, 136, 177)
+end
+
+-- HOME PAGE ----------------------------------------------------
+heading(
+    homePage,
+    "WELCOME TO THUMBSHUB",
+    "Early release",
+    "The hub is still being polished — expect bugs, changes and unfinished features."
+)
+
+local heroCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 104),
+    Size = UDim2.new(1, 0, 0, 220),
+    BackgroundColor3 = Color3.fromRGB(13, 17, 35),
+    BorderSizePixel = 0,
+}, homePage)
+make("UICorner", {CornerRadius = UDim.new(0, 18)}, heroCard)
+make("UIStroke", {Color = Color3.fromRGB(57, 71, 119), Thickness = 1}, heroCard)
+addGradient(heroCard, 135, Color3.fromRGB(14, 28, 53), Color3.fromRGB(46, 17, 51))
+
+local heroGlow = make("Frame", {
+    Position = UDim2.fromOffset(18, 18),
+    Size = UDim2.fromOffset(8, 164),
+    BackgroundColor3 = Color3.fromRGB(72, 226, 255),
+    BorderSizePixel = 0,
+}, heroCard)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, heroGlow)
+addGradient(heroGlow, 90, Color3.fromRGB(69, 230, 255), Color3.fromRGB(255, 88, 215))
+
+local homeMain = text("THUMBSHUB", 42, 28, 400, 42, 28, true, heroCard)
+addGradient(homeMain, 0, Color3.fromRGB(90, 236, 255), Color3.fromRGB(255, 108, 220))
+local homeTag = text("FARMING  •  AUTOMATION  •  MOVEMENT", 42, 70, 430, 22, 8, true, heroCard)
+homeTag.TextColor3 = Color3.fromRGB(144, 161, 201)
+local homeMessage = text(
+    "Thanks for testing ThumbsHub.\nNew systems are being added and existing systems are being refined.",
+    42, 108, 430, 56, 10, false, heroCard
+)
+homeMessage.TextColor3 = Color3.fromRGB(200, 209, 233)
+homeMessage.TextYAlignment = Enum.TextYAlignment.Top
+
+local creatorCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 340),
+    Size = UDim2.fromOffset(250, 115),
+    BackgroundColor3 = Color3.fromRGB(17, 21, 41),
+    BorderSizePixel = 0,
+}, homePage)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, creatorCard)
+make("UIStroke", {Color = Color3.fromRGB(60, 71, 118), Thickness = 1}, creatorCard)
+local creatorKicker = text("CREATED BY", 16, 14, 200, 16, 7, true, creatorCard)
+creatorKicker.TextColor3 = Color3.fromRGB(108, 225, 255)
+local creatorName = text("REALLYCOOLJOSH", 16, 36, 220, 27, 14, true, creatorCard)
+addGradient(creatorName, 0, Color3.fromRGB(87, 229, 255), Color3.fromRGB(255, 111, 220))
+local creatorHint = text("Built for the community • more to come", 16, 68, 220, 24, 7, false, creatorCard)
+creatorHint.TextColor3 = Color3.fromRGB(115, 133, 173)
+
+local homeTip = make("Frame", {
+    Position = UDim2.fromOffset(266, 340),
+    Size = UDim2.new(1, -266, 0, 115),
+    BackgroundColor3 = Color3.fromRGB(17, 21, 41),
+    BorderSizePixel = 0,
+}, homePage)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, homeTip)
+make("UIStroke", {Color = Color3.fromRGB(60, 71, 118), Thickness = 1}, homeTip)
+local tipTitle = text("QUICK START", 16, 14, 200, 16, 7, true, homeTip)
+tipTitle.TextColor3 = Color3.fromRGB(255, 126, 225)
+local tipBody = text(
+    "Open Farming to start automatic bag farming,\nAuto Rebirth, recovery and Wins.\nOpen Misc for movement tools.",
+    16, 37, 275, 62, 8, false, homeTip
+)
+tipBody.TextColor3 = Color3.fromRGB(142, 157, 193)
+tipBody.TextYAlignment = Enum.TextYAlignment.Top
+
+local homeFooter = text(
+    "THUMBSHUB IS IN EARLY RELEASE — REPORT BUGS AND EXPECT CHANGES",
+    0, 487, 500, 24, 7, true, homePage
+)
+homeFooter.TextColor3 = Color3.fromRGB(90, 205, 238)
+
+-- FARMING PAGE -------------------------------------------------
+heading(
+    farmingPage,
+    "FARMING",
+    "Automation hub",
+    "Everything for progression lives here, keeping the hub clean and focused."
+)
+
+local statusCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 94),
+    Size = UDim2.new(1, 0, 0, 68),
+    BackgroundColor3 = Color3.fromRGB(15, 19, 36),
+    BorderSizePixel = 0,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, statusCard)
+make("UIStroke", {Color = Color3.fromRGB(47, 62, 103), Thickness = 1}, statusCard)
+local statusDot = make("Frame", {
+    Position = UDim2.fromOffset(14, 26),
+    Size = UDim2.fromOffset(10, 10),
+    BackgroundColor3 = Color3.fromRGB(99, 232, 255),
+    BorderSizePixel = 0,
+}, statusCard)
+make("UICorner", {CornerRadius = UDim.new(1, 0)}, statusDot)
+local status = text("OFF • Choose a farming mode.", 35, 10, 300, 22, 10, true, statusCard)
+local timer = make("TextLabel", {
+    Position = UDim2.fromOffset(35, 34), Size = UDim2.fromOffset(145, 22),
+    BackgroundTransparency = 1, Text = "00:00:00", TextColor3 = Color3.fromRGB(103, 235, 255),
+    Font = Enum.Font.Code, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+}, statusCard)
+local counter = text("Idle inputs • 0", 305, 34, 160, 18, 8, false, statusCard)
+counter.TextXAlignment = Enum.TextXAlignment.Right
+counter.TextColor3 = Color3.fromRGB(121, 138, 178)
+
+local sectionTitle = text("SMART BAG FARM", 0, 174, 240, 18, 8, true, farmingPage)
+sectionTitle.TextColor3 = Color3.fromRGB(131, 225, 255)
+
+local bagCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 198), Size = UDim2.new(1, 0, 0, 93),
+    BackgroundColor3 = Color3.fromRGB(16, 21, 42), BorderSizePixel = 0,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, bagCard)
+make("UIStroke", {Color = Color3.fromRGB(62, 79, 130), Thickness = 1}, bagCard)
+local bagAccent = make("Frame", {
+    Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(5, 93),
+    BackgroundColor3 = Color3.fromRGB(83, 228, 255), BorderSizePixel = 0,
+}, bagCard)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, bagAccent)
+addGradient(bagAccent, 90, Color3.fromRGB(76, 230, 255), Color3.fromRGB(255, 89, 216))
+local bagHeading = text("BEST UNLOCKED BAG", 18, 10, 240, 17, 8, true, bagCard)
+bagHeading.TextColor3 = Color3.fromRGB(127, 223, 255)
+local bagDetail = text("Scanning training zones...", 18, 29, 315, 25, 12, true, bagCard)
+local bagSub = text("Automatically swaps when a stronger unlocked bag appears", 18, 55, 345, 20, 8, false, bagCard)
+bagSub.TextColor3 = Color3.fromRGB(117, 138, 181)
+local scanBagButton = make("TextButton", {
+    Position = UDim2.new(1, -99, 0, 27), Size = UDim2.fromOffset(82, 40),
+    BackgroundColor3 = Color3.fromRGB(68, 53, 139), BorderSizePixel = 0,
+    Text = "SCAN", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, bagCard)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, scanBagButton)
+addGradient(scanBagButton, 0, Color3.fromRGB(62, 95, 171), Color3.fromRGB(137, 51, 172))
+
+local coopButton = make("TextButton", {
+    Position = UDim2.fromOffset(0, 303), Size = UDim2.new(0.5, -6, 0, 43),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
+    Text = "CO-OP FARM • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, coopButton)
+addGradient(coopButton, 0, Color3.fromRGB(58, 62, 150), Color3.fromRGB(108, 53, 163))
+
+local bagButton = make("TextButton", {
+    Position = UDim2.new(0.5, 6, 0, 303), Size = UDim2.new(0.5, -6, 0, 43),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
+    Text = "AUTO BAG • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, bagButton)
+addGradient(bagButton, 0, Color3.fromRGB(58, 62, 150), Color3.fromRGB(108, 53, 163))
+
+local quickLabel = text("CORE OPTIONS", 0, 358, 240, 18, 8, true, farmingPage)
+quickLabel.TextColor3 = Color3.fromRGB(131, 225, 255)
+local minus = make("TextButton", {
+    Position = UDim2.fromOffset(0, 382), Size = UDim2.fromOffset(42, 37),
+    BackgroundColor3 = Color3.fromRGB(42, 46, 78), BorderSizePixel = 0,
+    Text = "−", TextColor3 = Color3.fromRGB(226,232,255), Font = Enum.Font.GothamBold, TextSize = 14,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, minus)
+local heightLabel = text("Hover • 8 studs", 52, 382, 327, 37, 9, false, farmingPage)
+heightLabel.TextColor3 = Color3.fromRGB(178, 191, 220)
+local plus = make("TextButton", {
+    Position = UDim2.new(1, -42, 0, 382), Size = UDim2.fromOffset(42, 37),
+    BackgroundColor3 = Color3.fromRGB(42, 46, 78), BorderSizePixel = 0,
+    Text = "+", TextColor3 = Color3.fromRGB(226,232,255), Font = Enum.Font.GothamBold, TextSize = 14,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, plus)
+
+local rebirthButton = make("TextButton", {
+    Position = UDim2.fromOffset(0, 429), Size = UDim2.new(1, 0, 0, 42),
+    BackgroundColor3 = Color3.fromRGB(20, 78, 83), BorderSizePixel = 0,
+    Text = "AUTO REBIRTH • CHECKING", TextColor3 = Color3.fromRGB(230,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, rebirthButton)
+addGradient(rebirthButton, 0, Color3.fromRGB(29, 91, 95), Color3.fromRGB(43, 112, 93))
+local rebirthHint = text("Mirrors the game's current setting", 0, 475, 325, 17, 8, false, farmingPage)
+rebirthHint.TextColor3 = Color3.fromRGB(109, 137, 160)
+
+local automationTitle = text("AUTOMATION", 0, 501, 240, 18, 8, true, farmingPage)
+automationTitle.TextColor3 = Color3.fromRGB(131, 225, 255)
+local farmForeverButton = make("TextButton", {
+    Position = UDim2.fromOffset(0, 525), Size = UDim2.new(0.5, -6, 0, 40),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
+    Text = "FARM FOREVER • ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, farmForeverButton)
+addGradient(farmForeverButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
+local recoverButton = make("TextButton", {
+    Position = UDim2.new(0.5, 6, 0, 525), Size = UDim2.new(0.5, -6, 0, 40),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
+    Text = "AUTO RECOVER • ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, recoverButton)
+addGradient(recoverButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
+local winsButton = make("TextButton", {
+    Position = UDim2.fromOffset(0, 572), Size = UDim2.new(1, 0, 0, 40),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
+    Text = "AUTO FARM WINS • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, winsButton)
+addGradient(winsButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
+local winsInfo = text("STAGE 76 → 90 • FREE WINS", 0, 615, 300, 15, 7, true, farmingPage)
+winsInfo.TextColor3 = Color3.fromRGB(104, 124, 165)
+
+local monitorCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 639), Size = UDim2.new(1, 0, 0, 60),
+    BackgroundColor3 = Color3.fromRGB(13, 17, 31), BorderSizePixel = 0,
+}, farmingPage)
+make("UICorner", {CornerRadius = UDim.new(0, 14)}, monitorCard)
+make("UIStroke", {Color = Color3.fromRGB(46, 58, 95), Thickness = 1}, monitorCard)
+local monitorTitle = text("SESSION MONITOR", 13, 6, 180, 15, 8, true, monitorCard)
+monitorTitle.TextColor3 = Color3.fromRGB(122, 225, 255)
+local sessionStats = text("Rebirths • 0     Rate • 0.0/hr", 13, 22, 445, 16, 9, true, monitorCard)
+local statsLabel = text("Farm: IDLE • Watchdog: WAITING • Recoveries: 0", 13, 40, 445, 14, 7, false, monitorCard)
+statsLabel.TextColor3 = Color3.fromRGB(108, 126, 165)
+
+local stopButton = make("TextButton", {
+    Position = UDim2.new(1, -145, 0, 14), Size = UDim2.fromOffset(128, 40),
+    BackgroundColor3 = Color3.fromRGB(92, 31, 77), BorderSizePixel = 0,
+    Text = "STOP ALL", TextColor3 = Color3.fromRGB(255, 226, 247),
+    Font = Enum.Font.GothamBold, TextSize = 8,
+}, statusCard)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, stopButton)
+addGradient(stopButton, 0, Color3.fromRGB(88, 29, 74), Color3.fromRGB(137, 39, 88))
+
+local toast = text("", 0, 686, 480, 15, 8, false, farmingPage)
+toast.TextColor3 = Color3.fromRGB(255, 124, 221)
+
+-- MISC PAGE ----------------------------------------------------
+heading(
+    miscPage,
+    "MISC",
+    "Movement tools",
+    "Simple movement controls, kept separate from the farming systems."
+)
+
+local miscHero = make("Frame", {
+    Position = UDim2.fromOffset(0, 98), Size = UDim2.new(1, 0, 0, 110),
+    BackgroundColor3 = Color3.fromRGB(15, 19, 38), BorderSizePixel = 0,
+}, miscPage)
+make("UICorner", {CornerRadius = UDim.new(0, 16)}, miscHero)
+make("UIStroke", {Color = Color3.fromRGB(55, 68, 112), Thickness = 1}, miscHero)
+local miscHeroTitle = text("MOVEMENT LAB", 16, 12, 250, 18, 8, true, miscHero)
+miscHeroTitle.TextColor3 = Color3.fromRGB(255, 126, 225)
+local miscHeroBody = text("Tune movement without cluttering your farming controls.", 16, 36, 440, 30, 9, false, miscHero)
+miscHeroBody.TextColor3 = Color3.fromRGB(145, 160, 196)
+
+local miscCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 226), Size = UDim2.new(1, 0, 0, 184),
+    BackgroundColor3 = Color3.fromRGB(16, 21, 42), BorderSizePixel = 0,
+}, miscPage)
+make("UICorner", {CornerRadius = UDim.new(0, 17)}, miscCard)
+make("UIStroke", {Color = Color3.fromRGB(62, 79, 130), Thickness = 1}, miscCard)
+
+local miscSpeedLabel = text("WALKSPEED", 18, 18, 120, 20, 8, true, miscCard)
+miscSpeedLabel.TextColor3 = Color3.fromRGB(126, 221, 255)
+local miscSpeedBox = make("TextBox", {
+    Position = UDim2.fromOffset(18, 45), Size = UDim2.fromOffset(100, 40),
+    BackgroundColor3 = Color3.fromRGB(29, 35, 61), BorderSizePixel = 0,
+    Text = "16", PlaceholderText = "16", TextColor3 = Color3.fromRGB(239, 243, 255),
+    Font = Enum.Font.GothamBold, TextSize = 12, ClearTextOnFocus = false,
+    TextXAlignment = Enum.TextXAlignment.Center,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, miscSpeedBox)
+local applySpeed = make("TextButton", {
+    Position = UDim2.fromOffset(128, 45), Size = UDim2.fromOffset(82, 40),
+    BackgroundColor3 = Color3.fromRGB(65, 75, 160), BorderSizePixel = 0,
+    Text = "APPLY", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, applySpeed)
+addGradient(applySpeed, 0, Color3.fromRGB(57, 102, 180), Color3.fromRGB(139, 53, 174))
+local speedState = text("Current • 16", 18, 96, 205, 20, 8, false, miscCard)
+speedState.TextColor3 = Color3.fromRGB(106, 128, 169)
+
+local noclipButton = make("TextButton", {
+    Position = UDim2.fromOffset(248, 45), Size = UDim2.fromOffset(155, 40),
+    BackgroundColor3 = Color3.fromRGB(65, 75, 160), BorderSizePixel = 0,
+    Text = "NOCLIP • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 10)}, noclipButton)
+addGradient(noclipButton, 0, Color3.fromRGB(57, 102, 180), Color3.fromRGB(139, 53, 174))
+local noclipHint = text("NOCLIP", 248, 96, 155, 20, 7, true, miscCard)
+noclipHint.TextColor3 = Color3.fromRGB(255, 126, 225)
+
+local miscFooter = text(
+    "Movement settings are remembered locally.  •  Reset them any time from this tab.",
+    0, 433, 500, 26, 8, false, miscPage
+)
+miscFooter.TextColor3 = Color3.fromRGB(111, 130, 172)
+
+local function setNavStyle(button, active)
+    local icon = button:FindFirstChildOfClass("TextLabel")
+    local labels = {}
+    for _, child in ipairs(button:GetChildren()) do
+        if child:IsA("TextLabel") then
+            table.insert(labels, child)
+        end
+    end
+
+    button.BackgroundColor3 = active and Color3.fromRGB(28, 33, 59) or Color3.fromRGB(15, 18, 34)
+    if active then
+        if not button:FindFirstChild("ActiveStroke") then
+            local stroke = Instance.new("UIStroke")
+            stroke.Name = "ActiveStroke"
+            stroke.Color = Color3.fromRGB(74, 221, 255)
+            stroke.Thickness = 0.9
+            stroke.Transparency = 0.2
+            stroke.Parent = button
+        end
+    else
+        local stroke = button:FindFirstChild("ActiveStroke")
+        if stroke then stroke:Destroy() end
+    end
+
+    if #labels >= 1 then
+        labels[1].TextColor3 = active and Color3.fromRGB(105, 233, 255) or Color3.fromRGB(108, 123, 164)
+    end
+    if #labels >= 2 then
+        labels[2].TextColor3 = active and Color3.fromRGB(240, 244, 255) or Color3.fromRGB(147, 160, 193)
+    end
+end
+
+local function showPage(pageName)
+    activePage = pageName
+    homePage.Visible = pageName == "home"
+    farmingPage.Visible = pageName == "farming"
+    miscPage.Visible = pageName == "misc"
+
+    setNavStyle(navHome, pageName == "home")
+    setNavStyle(navFarming, pageName == "farming")
+    setNavStyle(navMisc, pageName == "misc")
+end
+
+connect(navHome.Activated, function() showPage("home") end)
+connect(navFarming.Activated, function() showPage("farming") end)
+connect(navMisc.Activated, function() showPage("misc") end)
+
+showPage("home")
 
 local SUFFIX_MULTIPLIERS = {
     K = 1e3,
@@ -342,6 +793,15 @@ local function formatNumber(v)
     if av >= 1e6 then return string.format("%.2fM", v / 1e6) end
     if av >= 1e3 then return string.format("%.2fK", v / 1e3) end
     return string.format("%.0f", v)
+end
+
+local function refreshBagCard()
+    if not bagDetail then return end
+    if activeBagMultiplier > 0 then
+        bagDetail.Text = activeBagName .. "  •  " .. formatNumber(activeBagMultiplier) .. "x Power"
+    else
+        bagDetail.Text = "Scanning training zones..."
+    end
 end
 
 local function parseDisplayedNumber(textValue)
@@ -498,45 +958,30 @@ local function updateObservedStats()
         end
     end
 
-    local strengthValue, strengthDisplay = findDisplayedStat({"strength", "power"}, "strength")
-    if strengthValue ~= nil then
-        lastGainValue = strengthValue
-        lastStrengthDisplay = strengthDisplay or formatNumber(strengthValue)
-
-        if gainStartValue == nil then
-            gainStartValue = strengthValue
-            lastTrackedStrength = strengthValue
-            sessionGain = 0
-        else
-            local previous = lastTrackedStrength or gainStartValue
-            if strengthValue >= previous then
-                sessionGain = (sessionGain or 0) + (strengthValue - previous)
-            end
-            lastTrackedStrength = strengthValue
-        end
-    end
 end
 
 local function updateLiveMonitor()
     updateObservedStats()
-    local farmName = mode == "bag" and "HACKER BAG" or mode == "coop" and "CO-OP" or "IDLE"
-    local hours = math.max((os.clock() - sessionStart) / 3600, 1/3600)
+    local farmName = mode == "bag" and ("AUTO BAG • " .. activeBagName) or mode == "coop" and "CO-OP" or "IDLE"
+    if mode == "wins" then
+        farmName = "AUTO FARM WINS"
+    end
+
+    local hours = math.max((os.clock() - sessionStart) / 3600, 1 / 3600)
     local rate = sessionRebirths / hours
-    local strengthText = lastStrengthDisplay or (lastGainValue and formatNumber(lastGainValue)) or "unavailable"
-    local gainRate = sessionGain and sessionGain / hours or nil
 
     if sessionStats then
-        local rebirthText = lastRebirthDisplay and ("Rebirth: " .. lastRebirthDisplay) or "Rebirth: n/a"
+        local rebirthText = lastRebirthDisplay and ("Current: " .. lastRebirthDisplay) or "Current: n/a"
         sessionStats.Text = string.format(
-            "%s  •  Rebirths: %d  •  %.1f/hr",
+            "%s    •    Session rebirths: %d    •    %.1f/hr",
             rebirthText, sessionRebirths, rate
         )
     end
 
     if not statsLabel then return end
     statsLabel.Text = string.format(
-        "Farm: %s\nWatchdog: %s\nRecoveries: %d\nStrength: %s\nGain/hour: %s",
-        farmName, watchdogStatus, totalRecoveries, strengthText, gainRate and formatNumber(gainRate) or "unavailable"
+        "Farm: %s    •    Watchdog: %s    •    Recoveries: %d",
+        farmName, watchdogStatus, totalRecoveries
     )
 end
 
@@ -558,18 +1003,107 @@ local function safeWriteSettings()
             autoRecover = autoRecover,
             hoverHeight = hoverHeight,
             minimized = minimized,
+            miscWalkSpeed = miscWalkSpeed,
+            miscWalkSpeedEnabled = miscWalkSpeedEnabled,
         })
     end)
     if ok and raw then pcall(writefile, settingsFile, raw) end
 end
 
+local function getCurrentHumanoid()
+    local character = player.Character
+    if not character then return nil end
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyWalkSpeed()
+    local humanoid = getCurrentHumanoid()
+    if not humanoid then
+        showNotification("Character not ready")
+        return false
+    end
+    local value = tonumber(miscSpeedBox.Text)
+    if not value then
+        showNotification("WalkSpeed must be a number")
+        miscSpeedBox.Text = tostring(miscWalkSpeed)
+        return false
+    end
+    value = math.clamp(value, 1, 250)
+    miscWalkSpeed = value
+    miscWalkSpeedEnabled = true
+    humanoid.WalkSpeed = value
+    miscSpeedBox.Text = tostring(value)
+    safeWriteSettings()
+    showNotification(string.format("WalkSpeed set to %g", value))
+    return true
+end
+
+local function updateMiscButtons()
+    speedState.Text = string.format("WalkSpeed  •  %g", miscWalkSpeed)
+    speedState.TextColor3 = miscWalkSpeedEnabled and Color3.fromRGB(111, 248, 185) or Color3.fromRGB(104, 124, 165)
+    noclipButton.Text = noclipEnabled and "NOCLIP  •  ON" or "NOCLIP  •  OFF"
+    noclipButton.BackgroundColor3 = noclipEnabled and Color3.fromRGB(52, 91, 111) or Color3.fromRGB(66, 73, 150)
+end
+
+local function cacheCollision(character)
+    noclipCache = {}
+    for _, object in ipairs(character:GetDescendants()) do
+        if object:IsA("BasePart") then
+            noclipCache[object] = object.CanCollide
+        end
+    end
+end
+
+local function setNoClip(enabled)
+    noclipEnabled = enabled
+    local character = player.Character
+    if enabled then
+        if character then cacheCollision(character) end
+        updateMiscButtons()
+        showNotification("NoClip enabled")
+    else
+        for part, original in pairs(noclipCache) do
+            if part and part.Parent and part:IsA("BasePart") then
+                part.CanCollide = original
+            end
+        end
+        noclipCache = {}
+        updateMiscButtons()
+        showNotification("NoClip disabled")
+    end
+end
+
+connect(applySpeed.Activated, function()
+    applyWalkSpeed()
+end)
+
+connect(noclipButton.Activated, function()
+    setNoClip(not noclipEnabled)
+end)
+
+connect(RunService.Stepped, function()
+    if not noclipEnabled then return end
+    local character = player.Character
+    if not character then return end
+    for _, object in ipairs(character:GetDescendants()) do
+        if object:IsA("BasePart") then
+            object.CanCollide = false
+        end
+    end
+end)
+
 local function loadSavedSettings()
+
+refreshBagCard()
     local data = safeReadSettings()
     if not data then return end
     if type(data.farmForever) == "boolean" then farmForever = data.farmForever end
     if type(data.autoRecover) == "boolean" then autoRecover = data.autoRecover end
     if type(data.hoverHeight) == "number" then hoverHeight = math.clamp(data.hoverHeight, 2, 30) end
     if type(data.minimized) == "boolean" then minimized = data.minimized end
+    if type(data.miscWalkSpeed) == "number" then miscWalkSpeed = math.clamp(data.miscWalkSpeed, 1, 250) end
+    if type(data.miscWalkSpeedEnabled) == "boolean" then miscWalkSpeedEnabled = data.miscWalkSpeedEnabled end
+    miscSpeedBox.Text = tostring(miscWalkSpeed)
 end
 
 local function getCharacter()
@@ -609,14 +1143,19 @@ local function updateFarmButtons()
         or "CO-OP FARM: OFF"
 
     bagButton.Text = mode == "bag"
-        and "AUTO FARM: HACKER BAG — ON"
-        or "AUTO FARM: HACKER BAG — OFF"
+        and "AUTO FARM BAG — ON"
+        or "AUTO BAG  •  OFF"
 
     coopButton.BackgroundColor3 = mode == "coop"
         and Color3.fromRGB(52, 91, 111)
         or Color3.fromRGB(112, 78, 183)
 
     bagButton.BackgroundColor3 = mode == "bag"
+        and Color3.fromRGB(52, 91, 111)
+        or Color3.fromRGB(112, 78, 183)
+
+    winsButton.Text = mode == "wins" and "AUTO FARM WINS  •  ON" or "AUTO FARM WINS  •  OFF"
+    winsButton.BackgroundColor3 = mode == "wins"
         and Color3.fromRGB(52, 91, 111)
         or Color3.fromRGB(112, 78, 183)
 end
@@ -635,6 +1174,12 @@ local function updateAutomationButtons()
     recoverButton.BackgroundColor3 = autoRecover
         and Color3.fromRGB(52, 91, 111)
         or Color3.fromRGB(112, 78, 183)
+
+    winsButton.Text = mode == "wins" and "AUTO FARM WINS  •  ON" or "AUTO FARM WINS  •  OFF"
+    winsButton.BackgroundColor3 = mode == "wins"
+        and Color3.fromRGB(52, 91, 111)
+        or Color3.fromRGB(112, 78, 183)
+
     safeWriteSettings()
     updateLiveMonitor()
 end
@@ -643,11 +1188,13 @@ loadSavedSettings()
 
 local function stopFarm(message, keepIntent)
     generation += 1
+    winsLoopToken += 1
     mode = nil
     activeCharacter = nil
     clearHover()
     recovering = false
-    lastAction = "Stopped"
+    winsCollecting = false
+    _lastAction = "Stopped"
     watchdogStatus = "IDLE"
     updateLiveMonitor()
 
@@ -974,7 +1521,7 @@ local function ensureRebirthOn()
 
         if enabled then
             autoRebirthEnsured = true
-            lastAction = "Auto Rebirth enabled"
+            _lastAction = "Auto Rebirth enabled"
             showNotification("Auto Rebirth enabled")
         end
         updateLiveMonitor()
@@ -1016,6 +1563,172 @@ end
 local function moveCharacter(character, root, destination)
     local rootToPivot = root.CFrame:ToObjectSpace(character:GetPivot())
     character:PivotTo(destination * rootToPivot)
+end
+
+local WIN_START = CFrame.new(3751.4998, 4.6397, 94.0000)
+
+local WIN_STAGES = {
+    [76] = CFrame.new(3751.1626, 4.6517, 181.8242),
+    [77] = CFrame.new(3751.4736, 4.7070, 279.7270),
+    [78] = CFrame.new(3750.6926, 4.6517, 378.3850),
+    [79] = CFrame.new(3750.7927, 4.1924, 485.1749),
+    [80] = CFrame.new(3750.2744, 4.1924, 565.0862),
+    [81] = CFrame.new(3752.8870, 4.1924, 663.2512),
+    [82] = CFrame.new(3748.7292, 4.1924, 777.7699),
+    [83] = CFrame.new(3753.9473, 4.1924, 862.2478),
+    [84] = CFrame.new(3750.2151, 4.1924, 965.4652),
+    [85] = CFrame.new(3754.3887, 4.1924, 1056.1913),
+    [86] = CFrame.new(3758.7661, 4.1924, 1156.8420),
+    [87] = CFrame.new(3753.4182, 4.1924, 1246.3912),
+    [88] = CFrame.new(3753.3806, 4.1924, 1346.1050),
+    [89] = CFrame.new(3743.4727, 4.1924, 1448.2310),
+    [90] = CFrame.new(3752.2988, 4.1924, 1532.9622),
+}
+
+local WIN_STAGE_ORDER = {
+    76, 77, 78, 79, 80, 81, 82, 83,
+    84, 85, 86, 87, 88, 89, 90,
+}
+
+local function readCurrentStage()
+    local best
+    for _, obj in ipairs(getGuiTextObjects(playerGui)) do
+        local n = string.match(obj.Text, "^[%s>%-]*Stage%s+(%d+)")
+        if n then
+            local value = tonumber(n)
+            if value and (not best or value > best) then
+                best = value
+            end
+        end
+    end
+    return best
+end
+
+local WIN_ENEMY_RADIUS = 75
+local WIN_ENEMY_SPAWN_WAIT = 4.0
+local WIN_CLEAR_CONFIRM = 0.5
+local WIN_STAGE_SETTLE = 0.12
+local WIN_STAGE_TIMEOUT = 45
+
+local function getEnemyPosition(model)
+    local rootPart = model:FindFirstChild("HumanoidRootPart")
+    if rootPart and rootPart:IsA("BasePart") then
+        return rootPart.Position
+    end
+
+    if model.PrimaryPart and model.PrimaryPart:IsA("BasePart") then
+        return model.PrimaryPart.Position
+    end
+
+    local ok, pivot = pcall(function()
+        return model:GetPivot()
+    end)
+
+    if ok and pivot then
+        return pivot.Position
+    end
+
+    return nil
+end
+
+local function isPlayerCharacter(model)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character == model then
+            return true
+        end
+    end
+    return false
+end
+
+-- Actual combat enemies observed in the game carry EnemyId and a Humanoid.
+-- Lobby showcase characters and player characters are intentionally ignored.
+local function isLiveCombatEnemy(model)
+    if not model or not model:IsA("Model") then
+        return false
+    end
+
+    if isPlayerCharacter(model) then
+        return false
+    end
+
+    if model:GetAttribute("EnemyId") == nil then
+        return false
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0.1 then
+        return false
+    end
+
+    if model:GetAttribute("Ragdolled") == true then
+        return false
+    end
+
+    return true
+end
+
+local function countStageEnemies(stagePosition, radius)
+    local count = 0
+
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if isLiveCombatEnemy(obj) then
+            local position = getEnemyPosition(obj)
+            if position and (position - stagePosition).Magnitude <= radius then
+                count += 1
+            end
+        end
+    end
+
+    return count
+end
+
+local function waitForStageClear(token, targetStage, targetCFrame)
+    local stagePosition = targetCFrame.Position
+    local deadline = os.clock() + WIN_STAGE_TIMEOUT
+    local spawnDeadline = os.clock() + WIN_ENEMY_SPAWN_WAIT
+    local sawEnemy = false
+    local clearSince = nil
+
+    while not closed
+        and token == winsLoopToken
+        and mode == "wins"
+        and os.clock() < deadline do
+
+        local character, root = getCharacter()
+        if not character or not root then
+            return false, "character unavailable"
+        end
+
+        local nearby = countStageEnemies(stagePosition, WIN_ENEMY_RADIUS)
+
+        if nearby > 0 then
+            sawEnemy = true
+            clearSince = nil
+        elseif sawEnemy then
+            clearSince = clearSince or os.clock()
+
+            if os.clock() - clearSince >= WIN_CLEAR_CONFIRM then
+                winsHighestStage = math.max(winsHighestStage, targetStage)
+                return true, "cleared"
+            end
+        elseif os.clock() >= spawnDeadline then
+            -- Some stages may already be cleared or may not create a new local
+            -- enemy immediately. Do not freeze the entire farm on that case.
+            winsHighestStage = math.max(winsHighestStage, targetStage)
+            return true, "no enemy observed"
+        end
+
+        winsInfo.Text = string.format(
+            "Stage %d  •  Enemies: %d  •  Highest: %d",
+            targetStage,
+            nearby,
+            winsHighestStage
+        )
+
+        task.wait(0.20)
+    end
+
+    return false, "stage timeout"
 end
 
 local function enableHover(root)
@@ -1138,6 +1851,137 @@ local function startCoop(isRecovery)
     end)
 end
 
+-- ============================================================
+-- BEST UNLOCKED TRAINING BAG
+-- ============================================================
+
+local function parsePowerMultiplier(textValue)
+    if type(textValue) ~= "string" then
+        return 0
+    end
+
+    local cleaned = textValue
+        :upper()
+        :gsub(",", "")
+        :gsub("%s+", "")
+
+    local numberText, suffix = string.match(
+        cleaned,
+        "([%+%-]?%d+%.?%d*)XPOWER"
+    )
+
+    if not numberText then
+        numberText, suffix = string.match(
+            cleaned,
+            "([%+%-]?%d+%.?%d*)([A-Z]+)XPOWER"
+        )
+    end
+
+    if not numberText then
+        return tonumber(string.match(cleaned, "([%+%-]?%d+%.?%d*)")) or 0
+    end
+
+    local base = tonumber(numberText) or 0
+    if suffix and SUFFIX_MULTIPLIERS[suffix] then
+        return base * SUFFIX_MULTIPLIERS[suffix]
+    end
+
+    return base
+end
+
+local function getLabelText(root, wantedName)
+    if not root then return nil end
+
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA("TextLabel")
+            or obj:IsA("TextButton")
+            or obj:IsA("TextBox") then
+
+            if obj.Name == wantedName and type(obj.Text) == "string" then
+                return obj.Text
+            end
+        end
+    end
+
+    return nil
+end
+
+local function getBestUnlockedBag()
+    local best = nil
+
+    for _, mapName in ipairs({
+        "Map",
+        "MapTest",
+        "Map3",
+        "Map4",
+        "Map5",
+        "Map6",
+        "Map7",
+    }) do
+
+        local map = workspace:FindFirstChild(mapName)
+        local zoneFolder = map and map:FindFirstChild("TrainingZone")
+
+        if zoneFolder then
+            for _, zone in ipairs(zoneFolder:GetChildren()) do
+                if zone:IsA("Model")
+                    and string.match(zone.Name, "^TrainingZone%d+$") then
+
+                    local hitbox = zone:FindFirstChild("Hitbox")
+                    local billboard = hitbox and hitbox:FindFirstChild("TrainingZoneBillboard")
+                    local statusLabel = billboard and billboard:FindFirstChild("StatusLabel")
+                    local multiplierLabel = billboard and billboard:FindFirstChild("MultiplierLabel")
+                    local bag = zone:FindFirstChild("PunchingBag")
+
+                    local statusText = statusLabel and statusLabel.Text or ""
+                    local multiplierText = multiplierLabel and multiplierLabel.Text or ""
+
+                    if string.lower(statusText) == "unlocked" and bag then
+                        local multiplier = parsePowerMultiplier(multiplierText)
+                        local ok, pivot = pcall(function()
+                            return bag:GetPivot()
+                        end)
+
+                        if ok and pivot then
+                            if not best or multiplier > best.multiplier then
+                                best = {
+                                    name = zone.Name,
+                                    zoneId = zone:GetAttribute("ZoneId"),
+                                    multiplier = multiplier,
+                                    multiplierText = multiplierText,
+                                    cframe = pivot,
+                                    path = zone:GetFullName(),
+                                }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if best then
+        bestBagScanAt = os.clock()
+    end
+
+    return best
+end
+
+local function setActiveBag(best)
+    if not best then
+        activeBagCFrame = HACKER_BAG
+        activeBagName = "Fallback Bag"
+        activeBagMultiplier = 0
+        refreshBagCard()
+        return
+    end
+
+    activeBagCFrame = best.cframe
+    activeBagName = best.name
+    activeBagMultiplier = best.multiplier
+    refreshBagCard()
+end
+
 local function startBag(isRecovery)
     if clickBusy or rebirthBusy then
         status.Text = "Wait for the current UI action to finish."
@@ -1150,42 +1994,202 @@ local function startBag(isRecovery)
         return
     end
 
+    local best = getBestUnlockedBag()
+    setActiveBag(best)
+
     begin("bag", character, isRecovery == true)
-    lastAction = isRecovery and "Bag recovery" or "Bag started"
+    _lastAction = isRecovery and "Best Bag recovery" or "Best Bag started"
     if isRecovery then totalRecoveries += 1 end
     updateLiveMonitor()
-    showNotification(isRecovery and "Hacker Bag recovery" or "Hacker Bag farming started")
+
+    if best then
+        showNotification(
+            "Best bag: " .. best.name .. " • " .. best.multiplierText
+        )
+    else
+        showNotification("Best bag not detected • using fallback")
+    end
 
     local success, reason = pcall(function()
-        moveCharacter(character, root, HACKER_BAG)
+        moveCharacter(character, root, activeBagCFrame)
     end)
 
     if not success then
-        stopFarm("Stopped • Hacker Bag movement failed.")
-        warn("Hacker Bag:", reason)
+        stopFarm("Stopped • Best Bag movement failed.")
+        warn("Best Bag:", reason)
         return
     end
 
     status.Text =
-        "HACKER BAG ON • AFK handling enabled.\nEnabling Auto Rebirth..."
+        "AUTO FARM BAG ON • "
+        .. activeBagName
+        .. "\nFinding the best unlocked bag..."
 
     local token = generation
 
     task.spawn(function()
-        -- Give the game's UI time to settle after teleporting to the bag.
         task.wait(0.8)
 
         if closed or mode ~= "bag" or token ~= generation then
             return
         end
 
+        -- The game's own Auto Rebirth toggle remains responsible for rebirths.
         if ensureRebirthOn() then
-            status.Text = "HACKER BAG ON • Auto Rebirth ON.\nAFK farming active."
+            status.Text =
+                "AUTO FARM BAG ON • "
+                .. activeBagName
+                .. "\nAuto Rebirth ON • AFK farming active."
         else
-            status.Text = "HACKER BAG ON • Auto Rebirth not confirmed."
+            status.Text =
+                "AUTO FARM BAG ON • "
+                .. activeBagName
+                .. "\nAuto Rebirth not confirmed."
         end
     end)
 end
+
+local function startWins(isRecovery)
+    if clickBusy or rebirthBusy then
+        status.Text = "Wait for the current UI action to finish."
+        return
+    end
+
+    local character, root = getCharacter()
+    if not character then
+        status.Text = "Wait for your character to finish spawning."
+        return
+    end
+
+    local token = os.clock()
+    winsLoopToken = token
+    begin("wins", character, isRecovery == true)
+    winsStageIndex = 1
+    winsHighestStage = 0
+    _lastAction = isRecovery and "Wins recovery" or "Wins farming started"
+    if isRecovery then totalRecoveries += 1 end
+    updateLiveMonitor()
+    showNotification(isRecovery and "Auto Farm Wins recovery" or "Auto Farm Wins started")
+
+    task.spawn(function()
+        local success, reason = pcall(function()
+            for index, stageNumber in ipairs(WIN_STAGE_ORDER) do
+                if closed or token ~= winsLoopToken or mode ~= "wins" then
+                    return
+                end
+
+                winsStageIndex = index
+
+                local destination = WIN_STAGES[stageNumber]
+                local currentCharacter, currentRoot = getCharacter()
+                if not currentCharacter or not currentRoot then
+                    error("Character unavailable during Auto Farm Wins")
+                end
+
+                status.Text = string.format(
+                    "AUTO FARM WINS • Stage %d/90\nMoving to stage...",
+                    stageNumber
+                )
+
+                -- Keep the fast direct movement that worked in the original V17.
+                -- No PathfindingService and no slow waypoint interpolation.
+                moveCharacter(currentCharacter, currentRoot, destination)
+                task.wait(WIN_STAGE_SETTLE)
+
+                local cleared, clearReason = waitForStageClear(
+                    token,
+                    stageNumber,
+                    destination
+                )
+
+                if not cleared then
+                    status.Text = string.format(
+                        "Stage %d timed out • stopping Auto Farm Wins.",
+                        stageNumber
+                    )
+                    return
+                end
+            end
+
+            if closed or token ~= winsLoopToken or mode ~= "wins" then
+                return
+            end
+
+            winsCollecting = true
+            status.Text =
+                "AUTO FARM WINS • Stage 90 cleared\nCollecting FREE Wins..."
+
+            local currentCharacter, currentRoot = getCharacter()
+            if not currentCharacter or not currentRoot then
+                error("Character unavailable before win collection")
+            end
+
+            -- FREE Wins pad only.
+            moveCharacter(currentCharacter, currentRoot, WIN_START)
+            task.wait(1.25)
+            winsCollecting = false
+            showNotification("Free wins collected")
+        end)
+
+        winsCollecting = false
+
+        if not success
+            and token == winsLoopToken
+            and mode == "wins"
+            and not closed then
+
+            status.Text = "Auto Farm Wins paused • Check the game state."
+            warn("Auto Farm Wins:", reason)
+        end
+
+        if token == winsLoopToken
+            and mode == "wins"
+            and not closed
+            and desiredMode == "wins"
+            and farmForever then
+
+            task.wait(0.75)
+
+            if token == winsLoopToken and mode == "wins" then
+                startWins(true)
+            end
+        end
+    end)
+end
+
+connect(scanBagButton.Activated, function()
+    if clickBusy then return end
+
+    local best = getBestUnlockedBag()
+    setActiveBag(best)
+
+    if best then
+        showNotification("Best unlocked: " .. best.name .. " • " .. best.multiplierText)
+        if mode == "bag" then
+            local character, root = getCharacter()
+            if character and root then
+                pcall(function()
+                    moveCharacter(character, root, activeBagCFrame)
+                end)
+            end
+        end
+    else
+        showNotification("No unlocked training bag detected")
+    end
+end)
+
+connect(winsButton.Activated, function()
+    if mode == "wins" or desiredMode == "wins" then
+        desiredMode = nil
+        stopFarm("Auto Farm Wins OFF • Free-win automation stopped.")
+        updateAutomationButtons()
+        return
+    end
+
+    -- Auto Farm Wins is independent from Auto Rebirth. It never changes the game's
+    -- Auto Rebirth setting.
+    startWins(false)
+end)
 
 connect(coopButton.Activated, function()
     if mode == "coop" or desiredMode == "coop" then
@@ -1199,7 +2203,7 @@ end)
 connect(bagButton.Activated, function()
     if mode == "bag" or desiredMode == "bag" then
         desiredMode = nil
-        stopFarm("Auto Farm OFF • Hacker Bag farming stopped.")
+        stopFarm("Auto Farm OFF • Best unlocked bag farming stopped.")
     else
         startBag(false)
     end
@@ -1353,7 +2357,9 @@ local function runWatchdog()
     local ok = (gui.Parent == playerGui) and (mode ~= nil) and (character ~= nil) and (root ~= nil)
 
     if ok and mode == "bag" then
-        ok = (root.Position - HACKER_BAG.Position).Magnitude <= 60
+        ok = (root.Position - activeBagCFrame.Position).Magnitude <= 60
+    elseif ok and mode == "wins" then
+        ok = true
     elseif ok and mode == "coop" then
         ok = (root.Position - ARENA).Magnitude <= 275 and align ~= nil
     end
@@ -1379,14 +2385,36 @@ connect(RunService.Heartbeat, function(delta)
             else
                 stopFarm("Stopped • Character changed or died.")
             end
+        else
+            if miscWalkSpeedEnabled then
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                if humanoid then humanoid.WalkSpeed = miscWalkSpeed end
+            end
+
+            if noclipEnabled then
+                for _, object in ipairs(character:GetDescendants()) do
+                    if object:IsA("BasePart") then object.CanCollide = false end
+                end
+            end
+
+            if mode == "wins" then
+            -- Auto Farm Wins controls its own position and does not use the Co-op hover helper.
+            -- Do not let the normal farm watchdog stop the stage route while it is progressing.
+            if winsCollecting then
+                _lastAction = "Collecting free wins"
+                watchdogStatus = "OK"
+            else
+                watchdogStatus = "OK"
+            end
         elseif mode == "bag" then
-            if (root.Position - HACKER_BAG.Position).Magnitude > 50 then
+            -- Keep the watchdog tied to whichever bag is currently selected.
+            if (root.Position - activeBagCFrame.Position).Magnitude > 50 then
                 if farmForever and autoRecover and not recovering and os.clock() >= nextRecoveryAllowed then
                     nextRecoveryAllowed = os.clock() + recoveryCooldown
                     recovering = true
-                    lastAction = "Recovering"
+                    _lastAction = "Recovering"
                     updateLiveMonitor()
-                    status.Text = "Recovering • Returning to Hacker Bag..."
+                    status.Text = "Recovering • Returning to the best unlocked bag..."
                     task.spawn(function()
                         task.wait(0.4)
 
@@ -1399,7 +2427,26 @@ connect(RunService.Heartbeat, function(delta)
                         recovering = false
                     end)
                 else
-                    stopFarm("Stopped • You left the Hacker Bag area.")
+                    stopFarm("Stopped • You left the selected training bag.")
+                end
+            elseif os.clock() - bestBagScanAt >= BEST_BAG_RESCAN_INTERVAL then
+                local best = getBestUnlockedBag()
+
+                if best and best.multiplier > activeBagMultiplier then
+                    setActiveBag(best)
+                    status.Text =
+                        "AUTO FARM BAG • Better bag unlocked!\n"
+                        .. best.name .. " • " .. best.multiplierText
+
+                    local switched = pcall(function()
+                        moveCharacter(character, root, activeBagCFrame)
+                    end)
+
+                    if switched then
+                        showNotification(
+                            "Upgraded to " .. best.name
+                        )
+                    end
                 end
             end
         elseif align then
@@ -1418,6 +2465,7 @@ connect(RunService.Heartbeat, function(delta)
                     root.Position.Z
                 )
             end
+        end
         end
     end
 
@@ -1479,6 +2527,14 @@ connect(player.CharacterAdded, function(character)
 
         task.wait(0.6)
 
+        local newHumanoid = character:FindFirstChildOfClass("Humanoid")
+        if newHumanoid and miscWalkSpeedEnabled then
+            newHumanoid.WalkSpeed = miscWalkSpeed
+        end
+        if noclipEnabled then
+            cacheCollision(character)
+        end
+
         if closed or not desiredMode or not farmForever or not autoRecover then
             recovering = false
             return
@@ -1487,11 +2543,14 @@ connect(player.CharacterAdded, function(character)
         local selected = desiredMode
 
         if selected == "bag" then
-            status.Text = "Recovering • Returning to Hacker Bag..."
+            status.Text = "Recovering • Returning to best unlocked bag..."
             startBag(true)
         elseif selected == "coop" then
             status.Text = "Recovering • Restarting Co-op sequence..."
             startCoop(true)
+        elseif selected == "wins" then
+            status.Text = "Recovering • Restarting Auto Farm Wins..."
+            startWins(true)
         end
 
         recovering = false
@@ -1499,14 +2558,9 @@ connect(player.CharacterAdded, function(character)
 end)
 
 local function setMainControlsVisible(visible)
-    for _, child in ipairs(panel:GetChildren()) do
-        if child:IsA("GuiObject")
-            and child ~= title
-            and child ~= minimizeButton
-            and child ~= closeButton then
-            child.Visible = visible
-        end
-    end
+    -- Keep the header visible so minimize/close controls remain accessible.
+    if rail then rail.Visible = visible end
+    if content then content.Visible = visible end
 end
 
 local function toggleMinimize()
@@ -1515,10 +2569,10 @@ local function toggleMinimize()
 
     if minimized then
         setMainControlsVisible(false)
-        panel.Size = UDim2.fromOffset(410, 50)
+        panel.Size = UDim2.fromOffset(700, 58)
         minimizeButton.Text = "□"
     else
-        panel.Size = UDim2.fromOffset(410, 590)
+        panel.Size = UDim2.fromOffset(700, 820)
         setMainControlsVisible(true)
         minimizeButton.Text = "—"
         refreshRebirthButton()
@@ -1576,6 +2630,7 @@ gui.Destroying:Connect(function()
     generation += 1
     mode = nil
     clearHover()
+    if noclipEnabled then setNoClip(false) end
 
     for _, connection in ipairs(connections) do
         connection:Disconnect()
@@ -1587,11 +2642,23 @@ connect(closeButton.Activated, function()
 end)
 
 heightLabel.Text = "Hover  •  " .. hoverHeight .. " studs"
+updateMiscButtons()
+if miscWalkSpeedEnabled then applyWalkSpeed() end
 updateAutomationButtons()
 updateLiveMonitor()
 if minimized then
     setMainControlsVisible(false)
-    panel.Size = UDim2.fromOffset(410, 50)
+    panel.Size = UDim2.fromOffset(700, 58)
+    header.Size = UDim2.new(1, -28, 0, 44)
+    logoDot.Size = UDim2.fromOffset(30, 30)
+    logoDot.Position = UDim2.fromOffset(12, 7)
+    title.Position = UDim2.fromOffset(54, 6)
+    title.Size = UDim2.fromOffset(260, 28)
+    title.TextSize = 20
+    brandTag.Visible = false
+    headerStatus.Visible = false
+    minimizeButton.Position = UDim2.fromOffset(596, 10)
+    closeButton.Position = UDim2.fromOffset(630, 10)
     minimizeButton.Text = "□"
 end
 refreshRebirthButton()
