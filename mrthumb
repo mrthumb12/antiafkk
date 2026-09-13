@@ -66,9 +66,10 @@ local connections = {}
 -- V3 monitoring / settings
 local settingsFile = "thumbshub_settings.json"
 local totalRecoveries = 0
-local _lastAction = "Idle"
+local lastAction = "Idle"
 local watchdogStatus = "WAITING"
 local lastWatchdog = 0
+local notificationId = 0
 local sessionStart = os.clock()
 local sessionRebirths = 0
 local lastObservedRebirth = nil
@@ -262,7 +263,7 @@ end
 
 local title = text("THUMBSHUB", 78, 14, 310, 32, 25, true, header)
 addGradient(title, 0, Color3.fromRGB(95, 236, 255), Color3.fromRGB(255, 107, 222))
-local brandTag = text("ULTIMATE FARMING HUB  •  V36", 78, 43, 320, 18, 9, true, header)
+local brandTag = text("ULTIMATE FARMING HUB  •  V33", 78, 43, 320, 18, 9, true, header)
 brandTag.TextColor3 = Color3.fromRGB(145, 160, 198)
 
 local headerStatus = make("TextLabel", {
@@ -301,79 +302,63 @@ local closeButton = make("TextButton", {
 }, header)
 make("UICorner", {CornerRadius = UDim.new(0, 8)}, closeButton)
 
--- ============================================================
--- THUMBSHUB V36 • UNIQUE TABBED HUB UI
--- Home / Farming / Misc
--- ============================================================
-
+-- Left navigation rail: decorative hub structure for now; controls remain on one clean dashboard.
 local rail = make("Frame", {
     Position = UDim2.fromOffset(14, 104),
     Size = UDim2.fromOffset(150, 702),
-    BackgroundColor3 = Color3.fromRGB(10, 13, 27),
+    BackgroundColor3 = Color3.fromRGB(11, 14, 27),
     BorderSizePixel = 0,
 }, panel)
 make("UICorner", {CornerRadius = UDim.new(0, 18)}, rail)
-make("UIStroke", {Color = Color3.fromRGB(47, 58, 102), Thickness = 1}, rail)
+make("UIStroke", {Color = Color3.fromRGB(43, 53, 91), Thickness = 1}, rail)
 
-local railTitle = text("THUMBSHUB", 16, 18, 118, 20, 10, true, rail)
-railTitle.TextColor3 = Color3.fromRGB(105, 233, 255)
-local railSub = text("CONTROL CENTER", 16, 36, 118, 16, 7, true, rail)
+local railTitle = text("THUMBS", 18, 18, 100, 18, 9, true, rail)
+railTitle.TextColor3 = Color3.fromRGB(99, 224, 255)
+local railSub = text("CONTROL CENTER", 18, 34, 115, 18, 8, true, rail)
 railSub.TextColor3 = Color3.fromRGB(105, 119, 158)
 
-local navHome, navFarming, navMisc
-local activePage = "home"
-
-local function makeNavButton(label, icon, y)
-    local btn = make("TextButton", {
-        Position = UDim2.fromOffset(10, y),
-        Size = UDim2.new(1, -20, 0, 48),
-        BackgroundColor3 = Color3.fromRGB(15, 18, 34),
+local function railItem(label, y, active)
+    local item = make("Frame", {
+        Position = UDim2.fromOffset(12, y),
+        Size = UDim2.new(1, -24, 0, 42),
+        BackgroundColor3 = active and Color3.fromRGB(26, 30, 56) or Color3.fromRGB(15, 18, 34),
         BorderSizePixel = 0,
-        Text = "",
-        AutoButtonColor = false,
     }, rail)
-    make("UICorner", {CornerRadius = UDim.new(0, 12)}, btn)
-
-    local iconLabel = make("TextLabel", {
-        Position = UDim2.fromOffset(11, 0),
-        Size = UDim2.fromOffset(26, 48),
+    make("UICorner", {CornerRadius = UDim.new(0, 11)}, item)
+    if active then
+        addGradient(item, 0, Color3.fromRGB(31, 45, 74), Color3.fromRGB(65, 27, 72))
+        make("UIStroke", {Color = Color3.fromRGB(75, 211, 255), Thickness = 0.8, Transparency = 0.35}, item)
+    end
+    local icon = make("TextLabel", {
+        Position = UDim2.fromOffset(10, 0),
+        Size = UDim2.fromOffset(24, 42),
         BackgroundTransparency = 1,
-        Text = icon,
-        TextColor3 = Color3.fromRGB(108, 123, 164),
+        Text = active and "◆" or "◇",
+        TextColor3 = active and Color3.fromRGB(108, 235, 255) or Color3.fromRGB(100, 111, 145),
         Font = Enum.Font.GothamBold,
-        TextSize = 12,
+        TextSize = 10,
         TextXAlignment = Enum.TextXAlignment.Center,
-    }, btn)
-
-    local labelText = text(label, 42, 0, 92, 48, 9, true, btn)
-    labelText.TextColor3 = Color3.fromRGB(147, 160, 193)
-
-    return btn, iconLabel, labelText
+    }, item)
+    local lbl = text(label, 38, 0, 88, 42, 9, true, item)
+    lbl.TextColor3 = active and Color3.fromRGB(235, 241, 255) or Color3.fromRGB(148, 160, 191)
 end
 
-navHome = makeNavButton("Home", "⌂", 76)
-navFarming = makeNavButton("Farming", "⚡", 132)
-navMisc = makeNavButton("Misc", "⚙", 188)
+railItem("Dashboard", 70, true)
+railItem("Farming", 118, false)
+railItem("Automation", 166, false)
+railItem("Settings", 214, false)
 
-local railNote = make("Frame", {
-    Position = UDim2.fromOffset(10, 528),
-    Size = UDim2.new(1, -20, 0, 115),
-    BackgroundColor3 = Color3.fromRGB(14, 18, 36),
+local railBottom = make("Frame", {
+    Position = UDim2.fromOffset(12, 638),
+    Size = UDim2.new(1, -24, 0, 48),
+    BackgroundColor3 = Color3.fromRGB(15, 18, 34),
     BorderSizePixel = 0,
 }, rail)
-make("UICorner", {CornerRadius = UDim.new(0, 12)}, railNote)
-make("UIStroke", {Color = Color3.fromRGB(56, 67, 111), Thickness = 1}, railNote)
-
-local noteHeader = text("EARLY RELEASE", 12, 10, 116, 18, 8, true, railNote)
-noteHeader.TextColor3 = Color3.fromRGB(255, 120, 219)
-local noteBody = text(
-    "Some features may change.\nExpect bugs while ThumbsHub is\nbeing improved.",
-    12, 32, 116, 54, 7, false, railNote
-)
-noteBody.TextColor3 = Color3.fromRGB(124, 141, 181)
-noteBody.TextYAlignment = Enum.TextYAlignment.Top
-local noteVersion = text("V36 • PRE-RELEASE", 12, 88, 116, 16, 6, true, railNote)
-noteVersion.TextColor3 = Color3.fromRGB(91, 207, 239)
+make("UICorner", {CornerRadius = UDim.new(0, 11)}, railBottom)
+local railBottomText = text("THUMBSHUB", 11, 5, 110, 16, 8, true, railBottom)
+railBottomText.TextColor3 = Color3.fromRGB(255, 114, 222)
+local railBottomSub = text("made for farming", 11, 21, 110, 16, 7, false, railBottom)
+railBottomSub.TextColor3 = Color3.fromRGB(105, 119, 158)
 
 local content = make("Frame", {
     Position = UDim2.fromOffset(178, 104),
@@ -381,120 +366,15 @@ local content = make("Frame", {
     BackgroundTransparency = 1,
 }, panel)
 
-local function makePage()
-    local page = make("Frame", {
-        Size = UDim2.fromScale(1, 1),
-        BackgroundTransparency = 1,
-        Visible = false,
-    }, content)
-    return page
-end
-
-local homePage = makePage()
-local farmingPage = makePage()
-local miscPage = makePage()
-
-local function heading(parent, kicker, titleText, subtitle)
-    local kickerLabel = text(kicker, 0, 3, 500, 18, 8, true, parent)
-    kickerLabel.TextColor3 = Color3.fromRGB(108, 225, 255)
-    local titleLabel = text(titleText, 0, 23, 500, 38, 22, true, parent)
-    titleLabel.TextColor3 = Color3.fromRGB(241, 244, 255)
-    local subLabel = text(subtitle, 0, 60, 500, 24, 8, false, parent)
-    subLabel.TextColor3 = Color3.fromRGB(118, 136, 177)
-end
-
--- HOME PAGE ----------------------------------------------------
-heading(
-    homePage,
-    "WELCOME TO THUMBSHUB",
-    "Early release",
-    "The hub is still being polished — expect bugs, changes and unfinished features."
-)
-
-local heroCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 104),
-    Size = UDim2.new(1, 0, 0, 220),
-    BackgroundColor3 = Color3.fromRGB(13, 17, 35),
-    BorderSizePixel = 0,
-}, homePage)
-make("UICorner", {CornerRadius = UDim.new(0, 18)}, heroCard)
-make("UIStroke", {Color = Color3.fromRGB(57, 71, 119), Thickness = 1}, heroCard)
-addGradient(heroCard, 135, Color3.fromRGB(14, 28, 53), Color3.fromRGB(46, 17, 51))
-
-local heroGlow = make("Frame", {
-    Position = UDim2.fromOffset(18, 18),
-    Size = UDim2.fromOffset(8, 164),
-    BackgroundColor3 = Color3.fromRGB(72, 226, 255),
-    BorderSizePixel = 0,
-}, heroCard)
-make("UICorner", {CornerRadius = UDim.new(0, 8)}, heroGlow)
-addGradient(heroGlow, 90, Color3.fromRGB(69, 230, 255), Color3.fromRGB(255, 88, 215))
-
-local homeMain = text("THUMBSHUB", 42, 28, 400, 42, 28, true, heroCard)
-addGradient(homeMain, 0, Color3.fromRGB(90, 236, 255), Color3.fromRGB(255, 108, 220))
-local homeTag = text("FARMING  •  AUTOMATION  •  MOVEMENT", 42, 70, 430, 22, 8, true, heroCard)
-homeTag.TextColor3 = Color3.fromRGB(144, 161, 201)
-local homeMessage = text(
-    "Thanks for testing ThumbsHub.\nNew systems are being added and existing systems are being refined.",
-    42, 108, 430, 56, 10, false, heroCard
-)
-homeMessage.TextColor3 = Color3.fromRGB(200, 209, 233)
-homeMessage.TextYAlignment = Enum.TextYAlignment.Top
-
-local creatorCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 340),
-    Size = UDim2.fromOffset(250, 115),
-    BackgroundColor3 = Color3.fromRGB(17, 21, 41),
-    BorderSizePixel = 0,
-}, homePage)
-make("UICorner", {CornerRadius = UDim.new(0, 15)}, creatorCard)
-make("UIStroke", {Color = Color3.fromRGB(60, 71, 118), Thickness = 1}, creatorCard)
-local creatorKicker = text("CREATED BY", 16, 14, 200, 16, 7, true, creatorCard)
-creatorKicker.TextColor3 = Color3.fromRGB(108, 225, 255)
-local creatorName = text("REALLYCOOLJOSH", 16, 36, 220, 27, 14, true, creatorCard)
-addGradient(creatorName, 0, Color3.fromRGB(87, 229, 255), Color3.fromRGB(255, 111, 220))
-local creatorHint = text("Built for the community • more to come", 16, 68, 220, 24, 7, false, creatorCard)
-creatorHint.TextColor3 = Color3.fromRGB(115, 133, 173)
-
-local homeTip = make("Frame", {
-    Position = UDim2.fromOffset(266, 340),
-    Size = UDim2.new(1, -266, 0, 115),
-    BackgroundColor3 = Color3.fromRGB(17, 21, 41),
-    BorderSizePixel = 0,
-}, homePage)
-make("UICorner", {CornerRadius = UDim.new(0, 15)}, homeTip)
-make("UIStroke", {Color = Color3.fromRGB(60, 71, 118), Thickness = 1}, homeTip)
-local tipTitle = text("QUICK START", 16, 14, 200, 16, 7, true, homeTip)
-tipTitle.TextColor3 = Color3.fromRGB(255, 126, 225)
-local tipBody = text(
-    "Open Farming to start automatic bag farming,\nAuto Rebirth, recovery and Wins.\nOpen Misc for movement tools.",
-    16, 37, 275, 62, 8, false, homeTip
-)
-tipBody.TextColor3 = Color3.fromRGB(142, 157, 193)
-tipBody.TextYAlignment = Enum.TextYAlignment.Top
-
-local homeFooter = text(
-    "THUMBSHUB IS IN EARLY RELEASE — REPORT BUGS AND EXPECT CHANGES",
-    0, 487, 500, 24, 7, true, homePage
-)
-homeFooter.TextColor3 = Color3.fromRGB(90, 205, 238)
-
--- FARMING PAGE -------------------------------------------------
-heading(
-    farmingPage,
-    "FARMING",
-    "Automation hub",
-    "Everything for progression lives here, keeping the hub clean and focused."
-)
-
 local statusCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 94),
+    Position = UDim2.fromOffset(0, 0),
     Size = UDim2.new(1, 0, 0, 68),
     BackgroundColor3 = Color3.fromRGB(15, 19, 36),
     BorderSizePixel = 0,
-}, farmingPage)
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 15)}, statusCard)
 make("UIStroke", {Color = Color3.fromRGB(47, 62, 103), Thickness = 1}, statusCard)
+
 local statusDot = make("Frame", {
     Position = UDim2.fromOffset(14, 26),
     Size = UDim2.fromOffset(10, 10),
@@ -502,247 +382,218 @@ local statusDot = make("Frame", {
     BorderSizePixel = 0,
 }, statusCard)
 make("UICorner", {CornerRadius = UDim.new(1, 0)}, statusDot)
-local status = text("OFF • Choose a farming mode.", 35, 10, 300, 22, 10, true, statusCard)
+
+local status = text("OFF • Choose a farming mode.", 35, 10, 325, 22, 10, true, statusCard)
 local timer = make("TextLabel", {
-    Position = UDim2.fromOffset(35, 34), Size = UDim2.fromOffset(145, 22),
-    BackgroundTransparency = 1, Text = "00:00:00", TextColor3 = Color3.fromRGB(103, 235, 255),
-    Font = Enum.Font.Code, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(35, 34),
+    Size = UDim2.fromOffset(145, 22),
+    BackgroundTransparency = 1,
+    Text = "00:00:00",
+    TextColor3 = Color3.fromRGB(103, 235, 255),
+    Font = Enum.Font.Code,
+    TextSize = 15,
+    TextXAlignment = Enum.TextXAlignment.Left,
 }, statusCard)
-local counter = text("Idle inputs • 0", 305, 34, 160, 18, 8, false, statusCard)
+local counter = text("Idle inputs  •  0", 305, 34, 160, 18, 8, false, statusCard)
 counter.TextXAlignment = Enum.TextXAlignment.Right
 counter.TextColor3 = Color3.fromRGB(121, 138, 178)
 
-local sectionTitle = text("SMART BAG FARM", 0, 174, 240, 18, 8, true, farmingPage)
+local sectionTitle = text("FARM CONTROL", 0, 80, 240, 18, 9, true, content)
 sectionTitle.TextColor3 = Color3.fromRGB(131, 225, 255)
 
 local bagCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 198), Size = UDim2.new(1, 0, 0, 93),
-    BackgroundColor3 = Color3.fromRGB(16, 21, 42), BorderSizePixel = 0,
-}, farmingPage)
+    Position = UDim2.fromOffset(0, 104),
+    Size = UDim2.new(1, 0, 0, 93),
+    BackgroundColor3 = Color3.fromRGB(16, 21, 42),
+    BorderSizePixel = 0,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 15)}, bagCard)
 make("UIStroke", {Color = Color3.fromRGB(62, 79, 130), Thickness = 1}, bagCard)
+
 local bagAccent = make("Frame", {
-    Position = UDim2.fromOffset(0, 0), Size = UDim2.fromOffset(5, 93),
-    BackgroundColor3 = Color3.fromRGB(83, 228, 255), BorderSizePixel = 0,
+    Position = UDim2.fromOffset(0, 0),
+    Size = UDim2.fromOffset(5, 93),
+    BackgroundColor3 = Color3.fromRGB(83, 228, 255),
+    BorderSizePixel = 0,
 }, bagCard)
 make("UICorner", {CornerRadius = UDim.new(0, 15)}, bagAccent)
 addGradient(bagAccent, 90, Color3.fromRGB(76, 230, 255), Color3.fromRGB(255, 89, 216))
+
 local bagHeading = text("BEST UNLOCKED BAG", 18, 10, 240, 17, 8, true, bagCard)
 bagHeading.TextColor3 = Color3.fromRGB(127, 223, 255)
 local bagDetail = text("Scanning training zones...", 18, 29, 315, 25, 12, true, bagCard)
-local bagSub = text("Automatically swaps when a stronger unlocked bag appears", 18, 55, 345, 20, 8, false, bagCard)
+local bagSub = text("Auto-switches when a stronger unlocked zone appears", 18, 55, 345, 20, 8, false, bagCard)
 bagSub.TextColor3 = Color3.fromRGB(117, 138, 181)
+
 local scanBagButton = make("TextButton", {
-    Position = UDim2.new(1, -99, 0, 27), Size = UDim2.fromOffset(82, 40),
-    BackgroundColor3 = Color3.fromRGB(68, 53, 139), BorderSizePixel = 0,
-    Text = "SCAN", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+    Position = UDim2.new(1, -99, 0, 27),
+    Size = UDim2.fromOffset(82, 40),
+    BackgroundColor3 = Color3.fromRGB(68, 53, 139),
+    BorderSizePixel = 0,
+    Text = "SCAN",
+    TextColor3 = Color3.fromRGB(255,255,255),
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
 }, bagCard)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, scanBagButton)
 addGradient(scanBagButton, 0, Color3.fromRGB(62, 95, 171), Color3.fromRGB(137, 51, 172))
 
 local coopButton = make("TextButton", {
-    Position = UDim2.fromOffset(0, 303), Size = UDim2.new(0.5, -6, 0, 43),
-    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
-    Text = "CO-OP FARM • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Position = UDim2.fromOffset(0, 209),
+    Size = UDim2.new(0.5, -6, 0, 43),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141),
+    BorderSizePixel = 0,
+    Text = "CO-OP FARM  •  OFF",
+    TextColor3 = Color3.fromRGB(255,255,255),
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, coopButton)
 addGradient(coopButton, 0, Color3.fromRGB(58, 62, 150), Color3.fromRGB(108, 53, 163))
+make("UIStroke", {Color = Color3.fromRGB(104, 117, 205), Thickness = 0.8, Transparency = 0.35}, coopButton)
 
 local bagButton = make("TextButton", {
-    Position = UDim2.new(0.5, 6, 0, 303), Size = UDim2.new(0.5, -6, 0, 43),
-    BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
-    Text = "AUTO BAG • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Position = UDim2.new(0.5, 6, 0, 209),
+    Size = UDim2.new(0.5, -6, 0, 43),
+    BackgroundColor3 = Color3.fromRGB(69, 55, 141),
+    BorderSizePixel = 0,
+    Text = "AUTO BAG  •  OFF",
+    TextColor3 = Color3.fromRGB(255,255,255),
+    Font = Enum.Font.GothamBold,
+    TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, bagButton)
 addGradient(bagButton, 0, Color3.fromRGB(58, 62, 150), Color3.fromRGB(108, 53, 163))
+make("UIStroke", {Color = Color3.fromRGB(104, 117, 205), Thickness = 0.8, Transparency = 0.35}, bagButton)
 
-local quickLabel = text("CORE OPTIONS", 0, 358, 240, 18, 8, true, farmingPage)
+local quickLabel = text("FARM OPTIONS", 0, 264, 240, 18, 9, true, content)
 quickLabel.TextColor3 = Color3.fromRGB(131, 225, 255)
 local minus = make("TextButton", {
-    Position = UDim2.fromOffset(0, 382), Size = UDim2.fromOffset(42, 37),
+    Position = UDim2.fromOffset(0, 288), Size = UDim2.fromOffset(42, 37),
     BackgroundColor3 = Color3.fromRGB(42, 46, 78), BorderSizePixel = 0,
     Text = "−", TextColor3 = Color3.fromRGB(226,232,255), Font = Enum.Font.GothamBold, TextSize = 14,
-}, farmingPage)
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 10)}, minus)
-local heightLabel = text("Hover • 8 studs", 52, 382, 327, 37, 9, false, farmingPage)
+local heightLabel = text("Hover  •  8 studs", 52, 288, 327, 37, 9, false, content)
 heightLabel.TextColor3 = Color3.fromRGB(178, 191, 220)
 local plus = make("TextButton", {
-    Position = UDim2.new(1, -42, 0, 382), Size = UDim2.fromOffset(42, 37),
+    Position = UDim2.new(1, -42, 0, 288), Size = UDim2.fromOffset(42, 37),
     BackgroundColor3 = Color3.fromRGB(42, 46, 78), BorderSizePixel = 0,
     Text = "+", TextColor3 = Color3.fromRGB(226,232,255), Font = Enum.Font.GothamBold, TextSize = 14,
-}, farmingPage)
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 10)}, plus)
 
 local rebirthButton = make("TextButton", {
-    Position = UDim2.fromOffset(0, 429), Size = UDim2.new(1, 0, 0, 42),
+    Position = UDim2.fromOffset(0, 335), Size = UDim2.new(1, 0, 0, 42),
     BackgroundColor3 = Color3.fromRGB(20, 78, 83), BorderSizePixel = 0,
-    Text = "AUTO REBIRTH • CHECKING", TextColor3 = Color3.fromRGB(230,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Text = "AUTO REBIRTH  •  CHECKING", TextColor3 = Color3.fromRGB(230,255,255),
+    Font = Enum.Font.GothamBold, TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, rebirthButton)
 addGradient(rebirthButton, 0, Color3.fromRGB(29, 91, 95), Color3.fromRGB(43, 112, 93))
-local rebirthHint = text("Mirrors the game's current setting", 0, 475, 325, 17, 8, false, farmingPage)
+
+local rebirthHint = text("Mirrors the game's current setting", 0, 381, 325, 17, 8, false, content)
 rebirthHint.TextColor3 = Color3.fromRGB(109, 137, 160)
 
-local automationTitle = text("AUTOMATION", 0, 501, 240, 18, 8, true, farmingPage)
+local automationTitle = text("AUTOMATION", 0, 407, 240, 18, 9, true, content)
 automationTitle.TextColor3 = Color3.fromRGB(131, 225, 255)
+
 local farmForeverButton = make("TextButton", {
-    Position = UDim2.fromOffset(0, 525), Size = UDim2.new(0.5, -6, 0, 40),
+    Position = UDim2.fromOffset(0, 431), Size = UDim2.new(0.5, -6, 0, 40),
     BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
-    Text = "FARM FOREVER • ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Text = "FARM FOREVER  •  ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, farmForeverButton)
 addGradient(farmForeverButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
+
 local recoverButton = make("TextButton", {
-    Position = UDim2.new(0.5, 6, 0, 525), Size = UDim2.new(0.5, -6, 0, 40),
+    Position = UDim2.new(0.5, 6, 0, 431), Size = UDim2.new(0.5, -6, 0, 40),
     BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
-    Text = "AUTO RECOVER • ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Text = "AUTO RECOVER  •  ON", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, recoverButton)
 addGradient(recoverButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
+
 local winsButton = make("TextButton", {
-    Position = UDim2.fromOffset(0, 572), Size = UDim2.new(1, 0, 0, 40),
+    Position = UDim2.fromOffset(0, 478), Size = UDim2.new(1, 0, 0, 40),
     BackgroundColor3 = Color3.fromRGB(69, 55, 141), BorderSizePixel = 0,
-    Text = "AUTO FARM WINS • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, farmingPage)
+    Text = "AUTO FARM WINS  •  OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 11)}, winsButton)
 addGradient(winsButton, 0, Color3.fromRGB(59, 58, 147), Color3.fromRGB(108, 53, 163))
-local winsInfo = text("STAGE 76 → 90 • FREE WINS", 0, 615, 300, 15, 7, true, farmingPage)
+local winsInfo = text("STAGE 76 → 90   •   FREE WINS", 0, 521, 300, 15, 7, true, content)
 winsInfo.TextColor3 = Color3.fromRGB(104, 124, 165)
+local miscCard = make("Frame", {
+    Position = UDim2.fromOffset(0, 545), Size = UDim2.new(1, 0, 0, 74),
+    BackgroundColor3 = Color3.fromRGB(16, 21, 42), BorderSizePixel = 0,
+}, content)
+make("UICorner", {CornerRadius = UDim.new(0, 15)}, miscCard)
+make("UIStroke", {Color = Color3.fromRGB(62, 79, 130), Thickness = 1}, miscCard)
+local miscTitle = text("MISC", 14, 8, 70, 16, 8, true, miscCard)
+miscTitle.TextColor3 = Color3.fromRGB(255, 126, 225)
+local miscSpeedLabel = text("WALKSPEED", 14, 30, 72, 16, 7, true, miscCard)
+miscSpeedLabel.TextColor3 = Color3.fromRGB(118, 137, 181)
+local miscSpeedBox = make("TextBox", {
+    Position = UDim2.fromOffset(88, 27), Size = UDim2.fromOffset(55, 26),
+    BackgroundColor3 = Color3.fromRGB(30, 35, 61), BorderSizePixel = 0,
+    Text = "16", PlaceholderText = "16", TextColor3 = Color3.fromRGB(238, 244, 255),
+    Font = Enum.Font.GothamBold, TextSize = 9, ClearTextOnFocus = false,
+    TextXAlignment = Enum.TextXAlignment.Center,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, miscSpeedBox)
+local applySpeed = make("TextButton", {
+    Position = UDim2.fromOffset(149, 27), Size = UDim2.fromOffset(58, 26),
+    BackgroundColor3 = Color3.fromRGB(66, 73, 150), BorderSizePixel = 0,
+    Text = "APPLY", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 7,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, applySpeed)
+addGradient(applySpeed, 0, Color3.fromRGB(59, 98, 177), Color3.fromRGB(137, 57, 171))
+local speedState = text("Current  •  16", 0, 55, 207, 13, 7, false, miscCard)
+speedState.TextColor3 = Color3.fromRGB(104, 124, 165)
+local noclipButton = make("TextButton", {
+    Position = UDim2.fromOffset(218, 27), Size = UDim2.fromOffset(100, 26),
+    BackgroundColor3 = Color3.fromRGB(66, 73, 150), BorderSizePixel = 0,
+    Text = "NOCLIP  •  OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 7,
+}, miscCard)
+make("UICorner", {CornerRadius = UDim.new(0, 8)}, noclipButton)
+addGradient(noclipButton, 0, Color3.fromRGB(59, 98, 177), Color3.fromRGB(137, 57, 171))
+local miscHint = text("Change movement speed or pass through collision", 328, 27, 125, 26, 7, false, miscCard)
+miscHint.TextColor3 = Color3.fromRGB(104, 124, 165)
 
 local monitorCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 639), Size = UDim2.new(1, 0, 0, 60),
+    Position = UDim2.fromOffset(0, 629), Size = UDim2.new(1, 0, 0, 67),
     BackgroundColor3 = Color3.fromRGB(13, 17, 31), BorderSizePixel = 0,
-}, farmingPage)
+}, content)
 make("UICorner", {CornerRadius = UDim.new(0, 14)}, monitorCard)
 make("UIStroke", {Color = Color3.fromRGB(46, 58, 95), Thickness = 1}, monitorCard)
-local monitorTitle = text("SESSION MONITOR", 13, 6, 180, 15, 8, true, monitorCard)
+local monitorTitle = text("SESSION MONITOR", 13, 7, 180, 15, 8, true, monitorCard)
 monitorTitle.TextColor3 = Color3.fromRGB(122, 225, 255)
-local sessionStats = text("Rebirths • 0     Rate • 0.0/hr", 13, 22, 445, 16, 9, true, monitorCard)
-local statsLabel = text("Farm: IDLE • Watchdog: WAITING • Recoveries: 0", 13, 40, 445, 14, 7, false, monitorCard)
+local sessionStats = text("Rebirths  •  0     Rate  •  0.0/hr", 13, 24, 445, 16, 9, true, monitorCard)
+local statsLabel = text("Farm: IDLE   •   Watchdog: WAITING   •   Recoveries: 0", 13, 43, 445, 16, 7, false, monitorCard)
 statsLabel.TextColor3 = Color3.fromRGB(108, 126, 165)
 
 local stopButton = make("TextButton", {
-    Position = UDim2.new(1, -145, 0, 14), Size = UDim2.fromOffset(128, 40),
-    BackgroundColor3 = Color3.fromRGB(92, 31, 77), BorderSizePixel = 0,
-    Text = "STOP ALL", TextColor3 = Color3.fromRGB(255, 226, 247),
-    Font = Enum.Font.GothamBold, TextSize = 8,
-}, statusCard)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, stopButton)
-addGradient(stopButton, 0, Color3.fromRGB(88, 29, 74), Color3.fromRGB(137, 39, 88))
+    Position = UDim2.fromOffset(0, 706), Size = UDim2.new(1, 0, 0, 42),
+    BackgroundColor3 = Color3.fromRGB(97, 31, 80), BorderSizePixel = 0,
+    Text = "STOP ALL  •  DISABLE AUTOMATION", TextColor3 = Color3.fromRGB(255, 225, 246),
+    Font = Enum.Font.GothamBold, TextSize = 9,
+}, content)
+make("UICorner", {CornerRadius = UDim.new(0, 12)}, stopButton)
+addGradient(stopButton, 0, Color3.fromRGB(94, 30, 77), Color3.fromRGB(141, 39, 87))
 
-local toast = text("", 0, 686, 480, 15, 8, false, farmingPage)
+local toast = text("", 0, 753, 480, 12, 8, false, content)
 toast.TextColor3 = Color3.fromRGB(255, 124, 221)
 
--- MISC PAGE ----------------------------------------------------
-heading(
-    miscPage,
-    "MISC",
-    "Movement tools",
-    "Simple movement controls, kept separate from the farming systems."
-)
-
-local miscHero = make("Frame", {
-    Position = UDim2.fromOffset(0, 98), Size = UDim2.new(1, 0, 0, 110),
-    BackgroundColor3 = Color3.fromRGB(15, 19, 38), BorderSizePixel = 0,
-}, miscPage)
-make("UICorner", {CornerRadius = UDim.new(0, 16)}, miscHero)
-make("UIStroke", {Color = Color3.fromRGB(55, 68, 112), Thickness = 1}, miscHero)
-local miscHeroTitle = text("MOVEMENT LAB", 16, 12, 250, 18, 8, true, miscHero)
-miscHeroTitle.TextColor3 = Color3.fromRGB(255, 126, 225)
-local miscHeroBody = text("Tune movement without cluttering your farming controls.", 16, 36, 440, 30, 9, false, miscHero)
-miscHeroBody.TextColor3 = Color3.fromRGB(145, 160, 196)
-
-local miscCard = make("Frame", {
-    Position = UDim2.fromOffset(0, 226), Size = UDim2.new(1, 0, 0, 184),
-    BackgroundColor3 = Color3.fromRGB(16, 21, 42), BorderSizePixel = 0,
-}, miscPage)
-make("UICorner", {CornerRadius = UDim.new(0, 17)}, miscCard)
-make("UIStroke", {Color = Color3.fromRGB(62, 79, 130), Thickness = 1}, miscCard)
-
-local miscSpeedLabel = text("WALKSPEED", 18, 18, 120, 20, 8, true, miscCard)
-miscSpeedLabel.TextColor3 = Color3.fromRGB(126, 221, 255)
-local miscSpeedBox = make("TextBox", {
-    Position = UDim2.fromOffset(18, 45), Size = UDim2.fromOffset(100, 40),
-    BackgroundColor3 = Color3.fromRGB(29, 35, 61), BorderSizePixel = 0,
-    Text = "16", PlaceholderText = "16", TextColor3 = Color3.fromRGB(239, 243, 255),
-    Font = Enum.Font.GothamBold, TextSize = 12, ClearTextOnFocus = false,
-    TextXAlignment = Enum.TextXAlignment.Center,
-}, miscCard)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, miscSpeedBox)
-local applySpeed = make("TextButton", {
-    Position = UDim2.fromOffset(128, 45), Size = UDim2.fromOffset(82, 40),
-    BackgroundColor3 = Color3.fromRGB(65, 75, 160), BorderSizePixel = 0,
-    Text = "APPLY", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, miscCard)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, applySpeed)
-addGradient(applySpeed, 0, Color3.fromRGB(57, 102, 180), Color3.fromRGB(139, 53, 174))
-local speedState = text("Current • 16", 18, 96, 205, 20, 8, false, miscCard)
-speedState.TextColor3 = Color3.fromRGB(106, 128, 169)
-
-local noclipButton = make("TextButton", {
-    Position = UDim2.fromOffset(248, 45), Size = UDim2.fromOffset(155, 40),
-    BackgroundColor3 = Color3.fromRGB(65, 75, 160), BorderSizePixel = 0,
-    Text = "NOCLIP • OFF", TextColor3 = Color3.fromRGB(255,255,255), Font = Enum.Font.GothamBold, TextSize = 9,
-}, miscCard)
-make("UICorner", {CornerRadius = UDim.new(0, 10)}, noclipButton)
-addGradient(noclipButton, 0, Color3.fromRGB(57, 102, 180), Color3.fromRGB(139, 53, 174))
-local noclipHint = text("NOCLIP", 248, 96, 155, 20, 7, true, miscCard)
-noclipHint.TextColor3 = Color3.fromRGB(255, 126, 225)
-
-local miscFooter = text(
-    "Movement settings are remembered locally.  •  Reset them any time from this tab.",
-    0, 433, 500, 26, 8, false, miscPage
-)
-miscFooter.TextColor3 = Color3.fromRGB(111, 130, 172)
-
-local function setNavStyle(button, active)
-    local icon = button:FindFirstChildOfClass("TextLabel")
-    local labels = {}
-    for _, child in ipairs(button:GetChildren()) do
-        if child:IsA("TextLabel") then
-            table.insert(labels, child)
+local function showNotification(message)
+    notificationId += 1
+    local id = notificationId
+    toast.Text = "• " .. message
+    task.delay(3, function()
+        if not closed and id == notificationId then
+            toast.Text = ""
         end
-    end
-
-    button.BackgroundColor3 = active and Color3.fromRGB(28, 33, 59) or Color3.fromRGB(15, 18, 34)
-    if active then
-        if not button:FindFirstChild("ActiveStroke") then
-            local stroke = Instance.new("UIStroke")
-            stroke.Name = "ActiveStroke"
-            stroke.Color = Color3.fromRGB(74, 221, 255)
-            stroke.Thickness = 0.9
-            stroke.Transparency = 0.2
-            stroke.Parent = button
-        end
-    else
-        local stroke = button:FindFirstChild("ActiveStroke")
-        if stroke then stroke:Destroy() end
-    end
-
-    if #labels >= 1 then
-        labels[1].TextColor3 = active and Color3.fromRGB(105, 233, 255) or Color3.fromRGB(108, 123, 164)
-    end
-    if #labels >= 2 then
-        labels[2].TextColor3 = active and Color3.fromRGB(240, 244, 255) or Color3.fromRGB(147, 160, 193)
-    end
+    end)
 end
-
-local function showPage(pageName)
-    activePage = pageName
-    homePage.Visible = pageName == "home"
-    farmingPage.Visible = pageName == "farming"
-    miscPage.Visible = pageName == "misc"
-
-    setNavStyle(navHome, pageName == "home")
-    setNavStyle(navFarming, pageName == "farming")
-    setNavStyle(navMisc, pageName == "misc")
-end
-
-connect(navHome.Activated, function() showPage("home") end)
-connect(navFarming.Activated, function() showPage("farming") end)
-connect(navMisc.Activated, function() showPage("misc") end)
-
-showPage("home")
 
 local SUFFIX_MULTIPLIERS = {
     K = 1e3,
@@ -1194,7 +1045,7 @@ local function stopFarm(message, keepIntent)
     clearHover()
     recovering = false
     winsCollecting = false
-    _lastAction = "Stopped"
+    lastAction = "Stopped"
     watchdogStatus = "IDLE"
     updateLiveMonitor()
 
@@ -1521,7 +1372,7 @@ local function ensureRebirthOn()
 
         if enabled then
             autoRebirthEnsured = true
-            _lastAction = "Auto Rebirth enabled"
+            lastAction = "Auto Rebirth enabled"
             showNotification("Auto Rebirth enabled")
         end
         updateLiveMonitor()
@@ -1998,7 +1849,7 @@ local function startBag(isRecovery)
     setActiveBag(best)
 
     begin("bag", character, isRecovery == true)
-    _lastAction = isRecovery and "Best Bag recovery" or "Best Bag started"
+    lastAction = isRecovery and "Best Bag recovery" or "Best Bag started"
     if isRecovery then totalRecoveries += 1 end
     updateLiveMonitor()
 
@@ -2066,7 +1917,7 @@ local function startWins(isRecovery)
     begin("wins", character, isRecovery == true)
     winsStageIndex = 1
     winsHighestStage = 0
-    _lastAction = isRecovery and "Wins recovery" or "Wins farming started"
+    lastAction = isRecovery and "Wins recovery" or "Wins farming started"
     if isRecovery then totalRecoveries += 1 end
     updateLiveMonitor()
     showNotification(isRecovery and "Auto Farm Wins recovery" or "Auto Farm Wins started")
@@ -2401,7 +2252,7 @@ connect(RunService.Heartbeat, function(delta)
             -- Auto Farm Wins controls its own position and does not use the Co-op hover helper.
             -- Do not let the normal farm watchdog stop the stage route while it is progressing.
             if winsCollecting then
-                _lastAction = "Collecting free wins"
+                lastAction = "Collecting free wins"
                 watchdogStatus = "OK"
             else
                 watchdogStatus = "OK"
@@ -2412,7 +2263,7 @@ connect(RunService.Heartbeat, function(delta)
                 if farmForever and autoRecover and not recovering and os.clock() >= nextRecoveryAllowed then
                     nextRecoveryAllowed = os.clock() + recoveryCooldown
                     recovering = true
-                    _lastAction = "Recovering"
+                    lastAction = "Recovering"
                     updateLiveMonitor()
                     status.Text = "Recovering • Returning to the best unlocked bag..."
                     task.spawn(function()
